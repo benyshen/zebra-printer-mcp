@@ -94,6 +94,53 @@ zpl_from_image(image_path="D:/标签照片.png", width_mm=60, height_mm=40,
 
 实测（样例图 480×320 px，60×40 mm / 203 dpi）：Code128 `^FO30,21`、二维码 `^FO379,24`、文字 `^FO296,231`，与已有参考实现的像素测量**逐值一致**；把生成的 ZPL 送 Labelary 渲染再用 zxing 解码，`ABC123` 与 `NGSU` 原样读回。
 
+用大模型认字（可选，需给端点）：
+
+本机没装 OCR 权重、或字被设计得 PP-OCRv4 认不出时，让视觉大模型来读。接口按 OpenAI
+`/chat/completions` 兼容格式，vLLM / ollama / LM Studio / DashScope / 通义 / Moonshot / 本地 Strata 都能接。
+
+两种给法，**key 都不落盘、不进仓库、不回显**：
+
+```text
+# 1) 单次调用直接传（客户端能安全持有 key 时）
+zpl_from_image(image_path="D:/标签.png", width_mm=60, height_mm=40,
+               llm_url="http://192.168.1.50:8000/v1", llm_key="<你的key>",
+               llm_model="qwen2.5-vl-7b-instruct")
+```
+
+```json
+// 2) 注册时写进环境变量，之后调用不必再传
+{
+  "mcpServers": {
+    "zebra-printer": {
+      "command": "<repo路径>/.venv/Scripts/python.exe",
+      "args": ["-m", "zebra_mcp.server"],
+      "cwd": "<repo路径>",
+      "env": {
+        "ZEBRA_VISION_URL": "http://192.168.1.50:8000/v1",
+        "ZEBRA_VISION_KEY": "<你的key>",
+        "ZEBRA_VISION_MODEL": "qwen2.5-vl-7b-instruct"
+      }
+    }
+  }
+}
+```
+
+Hermes 侧同理，把 `env` 放进
+`hermes config set mcp_servers.zebra-printer '{...,"env":{"ZEBRA_VISION_URL":"...","ZEBRA_VISION_KEY":"..."}}'`。
+`llm_url` 可以只写到 `/v1`，模块自己补 `/chat/completions`；`llm_model` 省略时默认
+`qwen2.5-vl-7b-instruct`——**多数端点必须显式给自己的模型名**。
+
+分工与边界：
+
+- **条码内容永远以 zxing 解码为准**。模型报的条码值只作提示：zxing 一张都没解出来时才用它兜底，
+  并且返回里标 `unverified: true` + `BARCODE_UNVERIFIED` 警告——模型读错一位数字的概率不低，打一张扫一张。
+- 模型的文字框是 0–1 归一化坐标，像素→dot 仍在 `photo.py` 里算，可复核。
+- 失败会明确分类：`HTTP 401 → check llm_key`、`404 → check llm_url`、`429 → rate limited`、`URLError → cannot reach`；
+  报错文本会把 key 和响应体都截断+替换，不会漏进返回值。
+- 识图要花钱/要时间：一张标签 ≈ 1 次多模态调用（几百 token + 一张图）。本地 OCR 是 0.14 s 的免费路径，
+  能用就别走网络。
+
 安装与模型：
 
 ```bash
@@ -125,7 +172,7 @@ ZR668-200dpi 内置中文 TrueType：`E:SIMSUN.TTF`（宋体）、`E:HANS.TTF`�
 
 ```bash
 hermes config set mcp_servers.zebra-printer '{"command":"<repo路径>/.venv/Scripts/python.exe","args":["-m","zebra_mcp.server"],"cwd":"<repo路径>","connect_timeout":30.0,"enabled":true}'
-hermes mcp test zebra-printer   # ✓ Connected, 6 tools discovered
+hermes mcp test zebra-printer   # ✓ Connected, 8 tools discovered
 ```
 
 （JSON 里用**正斜杠**路径——`\\w` 这类反斜杠会被转义吃掉。）

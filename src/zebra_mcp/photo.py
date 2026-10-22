@@ -197,8 +197,15 @@ def _advance(text: str) -> float:
 
 def convert(image: str | Path, *, width_mm: float = 60.0, height_mm: float = 40.0,
             dpi: int = 203, frame: str = "auto", use_ocr: bool = True,
-            font_file: str = "E:SIMSUN.TTF", min_conf: float = 0.5) -> dict:
-    """Photo -> {zpl, spec, elements, warnings} (no printing, no side effects)."""
+            font_file: str = "E:SIMSUN.TTF", min_conf: float = 0.5,
+            llm_url: str = "", llm_key: str = "", llm_model: str = "",
+            vision_timeout: float = 60.0) -> dict:
+    """Photo -> {zpl, spec, elements, warnings} (no printing, no side effects).
+
+    Text comes from PP-OCRv4 when the local weights are present, otherwise from a
+    vision LLM when llm_url/llm_key/llm_model (or ZEBRA_VISION_*) is configured.
+    Barcode content always comes from zxing: a VLM's digits are not verifiable.
+    """
     if not Path(image).exists():
         return {"ok": False, "error": f"image not found: {image}"}
     img = read_image(image)
@@ -232,13 +239,52 @@ def convert(image: str | Path, *, width_mm: float = 60.0, height_mm: float = 40.
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
 
     texts: list[dict] = []
+    source = "local_ocr"
+    from . import vision
+    want_vision = bool(llm_url or llm_key or llm_model or vision.available().get("ok"))
     if use_ocr:
         from . import ocr
         state = ocr.available()
         if state.get("ok"):
             texts = ocr.run(img, min_conf=min_conf)
         else:
+            source = "none"
             warnings.append({"code": "NO_OCR", "message": state.get("error", "OCR unavailable")})
+    if want_vision and (not texts or llm_url or llm_model):
+        # explicit arguments mean "use the model", not "if local OCR failed"
+        vr = vision.analyze(img, base_url=llm_url, api_key=llm_key, model=llm_model,
+                            timeout=vision_timeout)
+        if vr.get("ok"):
+            source = "vision"
+            hints = []
+            for el in vr["elements"]:
+                x, y, w, h = el["box"]
+                box = [x * w_px, y * h_px, (x + w) * w_px, (y + h) * h_px]
+                if el["kind"] == "barcode":
+                    hints.append({"text": el["text"], "format": el.get("format"), "box": box})
+                else:
+                    texts.append({"text": el["text"], "conf": 1.0, "box": box})
+            warnings.append({"code": "VISION_USED",
+                             "message": f"text read by {vr.get('model')} "
+                                        f"(tokens {vr.get('usage', {}).get('total_tokens', '?')})"})
+            if hints:
+                warnings.append({"code": "VISION_BARCODE_HINT",
+                                 "message": f"model reported {len(hints)} barcode value(s): "
+                                            + ", ".join(repr(h["text"]) for h in hints)})
+            if not symbols and hints:
+                # nothing decoded: offer the model's values, clearly unverified
+                for hint in hints:
+                    symbols.append({"format": hint["format"] or "Code128",
+                                    "text": hint["text"], "box": hint["box"],
+                                    "is_2d": _is_2d_name(hint["format"]),
+                                    "hri": True, "unverified": True})
+                warnings.append({"code": "BARCODE_UNVERIFIED",
+                                 "message": "no symbol decoded; barcode content came from the model "
+                                            "and was NOT verified — print one and scan it"})
+        else:
+            warnings.append({"code": "VISION_FAILED", "message": vr.get("error", "vision call failed")})
+            if not texts:
+                source = "none"
 
     # Human-readable line under a 1D symbol: OCR usually gets one character wrong
     # ('ABC123' -> 'ABC1Z3'), so match on position, not equality, or the label
@@ -337,8 +383,17 @@ def convert(image: str | Path, *, width_mm: float = 60.0, height_mm: float = 40.
     return {"ok": True, "zpl": zpl, "spec": spec, "elements": elements,
             "warnings": warnings, "issues": issues, "basis": basis,
             "photo_px": [w_px, h_px], "label_dots": [pw, ll], "scale": round(scale, 4),
-            "decoded": [{"format": s["format"], "text": s["text"]} for s in symbols],
+            "source": source,
+            "decoded": [{"format": s["format"], "text": s["text"],
+                         **({"unverified": True} if s.get("unverified") else {})} for s in symbols],
             "symbol_count": len(symbols), "text_count": len(texts)}
+
+
+_TWO_D = {"qrcode", "datamatrix", "pdf417", "micropdf417", "aztec", "maxicode", "hanxin"}
+
+
+def _is_2d_name(fmt: str | None) -> bool:
+    return bool(fmt) and str(fmt).replace("-", "").replace(" ", "").lower() in _TWO_D
 
 
 def _mm(dots: float, dpi: int) -> float:

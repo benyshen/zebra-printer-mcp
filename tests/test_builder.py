@@ -343,4 +343,66 @@ try:
 except ImportError:
     print("  (photo deps absent: pip install 'zebra-printer-mcp[photo]' -- skipped)")
 
+# 30) vision LLM backend: stub an OpenAI-compatible endpoint and check the wire
+#     format, the key handling (never echoed) and the unverified-barcode rule.
+import threading, http.server, json as _json
+try:
+    from zebra_mcp import vision as _vision
+    seen = {}
+    KEY = "sk-test-DO-NOT-LEAK-123"
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            body = _json.loads(self.rfile.read(n) or b"{}")
+            seen["auth"] = self.headers.get("Authorization")
+            seen["model"] = body.get("model")
+            seen["img"] = body["messages"][1]["content"][1]["image_url"]["url"][:22]
+            payload = {"model": "stub-vl", "usage": {"total_tokens": 123},
+                       "choices": [{"message": {"content": _json.dumps({"elements": [
+                           {"kind": "text", "text": "NANJING", "box": {"x": .6, "y": .7, "w": .3, "h": .1}},
+                           {"kind": "barcode", "text": "XY-9", "format": "Code128",
+                            "box": {"x": .1, "y": .1, "w": .5, "h": .2}}]})}}]}
+            out = _json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/v1"
+
+    vr = _vision.analyze(__import__("numpy").zeros((40, 60, 3), "uint8"),
+                         base_url=url, api_key=KEY, model="stub-vl", timeout=10)
+    assert vr["ok"], vr
+    assert [e["text"] for e in vr["elements"]] == ["NANJING", "XY-9"], vr
+    assert seen["auth"] == f"Bearer {KEY}" and seen["model"] == "stub-vl", seen
+    assert seen["img"].startswith("data:image/png;base64"), seen
+    assert KEY not in _json.dumps(vr, ensure_ascii=False), "key leaked into the result"
+    assert "api_key" not in vr, vr
+
+    # through the photo pipeline: model text lands as a field, its barcode value
+    # only when zxing decoded nothing -- and then it is flagged unverified
+    res_v = photo.convert(fixture, width_mm=60, height_mm=40, frame="full",
+                          use_ocr=False, llm_url=url, llm_key=KEY, llm_model="stub-vl")
+    assert res_v["source"] == "vision", res_v.get("source")
+    kinds = [(e["kind"], e.get("text")) for e in res_v["elements"]]
+    assert ("text", "NANJING") in kinds, kinds
+    assert any(w["code"] == "VISION_BARCODE_HINT" for w in res_v["warnings"]), res_v["warnings"]
+    assert res_v["decoded"] and not any(d.get("unverified") for d in res_v["decoded"]), res_v["decoded"]
+    assert KEY not in _json.dumps(res_v, ensure_ascii=False)
+
+    # a wrong key must produce a hint, not the key
+    bad = _vision.analyze(__import__("numpy").zeros((40, 60, 3), "uint8"),
+                          base_url="http://127.0.0.1:1/v1", api_key=KEY, timeout=3)
+    assert bad["ok"] is False and KEY not in bad["error"], bad
+    srv.shutdown()
+except ImportError:
+    print("  (vision needs numpy/cv2: pip install -e '.[photo]' -- skipped)")
+
 print("ALL TESTS PASSED")

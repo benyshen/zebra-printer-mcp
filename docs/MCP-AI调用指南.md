@@ -213,6 +213,26 @@ zpl_from_image(image_path="D:/标签.png", width_mm=60, height_mm=40,
 - **HRI 必须按位置合并**：一维码下面那行字，OCR 十有八九错一个字符（`ABC123`→`ABC1Z3`）。按字面比对 → 判为"另一段文字"→ 标签上这行打两遍（一遍 `^BC …,Y`，一遍当文本）。
 - **`^BY` 必须能逐字段发**：一张标签上 128 码和二维码的模块宽不同，`^BY` 是打印机级设置，只在标签开头发一次会把两者绑死。现在字段带 `module_width` 就就地发 `^BY`。
 
+**两条识别通道，可换可不换**：
+
+| 通道 | 什么时候用 | 代价 |
+|---|---|---|
+| 本地 PP-OCRv4（默认） | 装了 `[photo]` + 模型；离线、批量、不算钱 | 0.14 s/张；字高 <12 px 会错 |
+| 视觉大模型（`llm_url`/`llm_key`/`llm_model` 或 `ZEBRA_VISION_*`） | 没装 OCR 权重；字体花、字号极小、版式怪；已经有现成的多模态端点 | 一次多模态请求（几百 token + 一张图）；网络与 key 依赖 |
+
+```
+zpl_from_image(image_path="D:/标签.png", width_mm=60, height_mm=40,
+               llm_url="http://<端点>/v1", llm_key="<key>", llm_model="qwen2.5-vl-7b-instruct")
+```
+
+给 key 的两种方式都由调用方决定：**单次传给工具**，或**注册 MCP 时写进 `env`**（`ZEBRA_VISION_URL`/
+`ZEBRA_VISION_KEY`/`ZEBRA_VISION_MODEL`），之后的调用不用再带。key 只在一次请求头里用过：
+不回显、不进 `issues`/`warnings`、不写日志、不落盘；错误信息会截断并替换掉 key（第 30 组断言专门锁这条）。
+
+安全边界（重要）：**条码内容只信 zxing 解码**。模型报的条码值当"提示"处理——只有 zxing 一个都没解出来时
+才用它兜底，并标记 `unverified: true` + `BARCODE_UNVERIFIED` 警告。多模态模型读错一位数字太常见，
+用它替换解码结果等于把可验证的东西换成不可验证的。文字用模型的没问题，人看一眼即可。
+
 诚实边界：字体认不出（统一 `^A0` / `E:SIMSUN.TTF`）、**线条/logo/图片不转**（不生成 `~DG`/`^GF`）、小字 OCR 会错。所以流程是"生成 → 人看一眼 `elements` → 再打"，不是"拍完直接打"。
 
 ---
@@ -230,7 +250,7 @@ zpl_from_image(image_path="D:/标签.png", width_mm=60, height_mm=40,
 | `send_zpl` | `zpl`、`transport_kind`(tcp/windows/usb/preview)、`host`/`printer`/`port`、`dry_run` | 发送结果 + 回显 | ≈1.0 s（tcp） | 网络或队列 |
 | `printer_status` | `host`、`port`、`sgd`、`timeout` | `{identification(~HI), status(~HS 第3行), sgd{}, native_status}` | ≈3.9 s | 网络 |
 | `print_xlsx` | `xlsx_path`、`name_column`/`id_column`（字母/序号/表头名）、尺寸与 `dry_run` | `{labels, rows_read, bytes, issues[], zpl_file, first_label, sent}` | 5 张 ≈1.0 s（单流） | 读 xlsx 用标准库，发送走 TCP |
-| `zpl_from_image` | `image_path`、`width_mm`/`height_mm`（比例尺）、`frame`(auto/label/full)、`use_ocr`、`dry_run`/`host` | `{ok, zpl, elements[], decoded[], warnings[], validation, symbol_count}` | 首次 0.45 s（装模型），之后 ≈0.14 s | cv2 + zxing-cpp + onnxruntime（`[photo]` extra） |
+| `zpl_from_image` | `image_path`、`width_mm`/`height_mm`（比例尺）、`frame`(auto/label/full)、`use_ocr`、`llm_url`/`llm_key`/`llm_model`（可选视觉通道）、`dry_run`/`host` | `{ok, zpl, elements[], decoded[], warnings[], validation, symbol_count}` | 首次 0.45 s（装模型），之后 ≈0.14 s | cv2 + zxing-cpp + onnxruntime（`[photo]` extra） |
 
 ### 4.2 内部模块（改代码时才关心）
 
@@ -239,12 +259,13 @@ zpl_from_image(image_path="D:/标签.png", width_mm=60, height_mm=40,
 | `builder.py` | 713 | spec→ZPL（含 27 制式 `BARCODE_SPECS`、图形、单位换算、范围校验、`validate_zpl`） |
 | `knowledge.py` | 337 | 253 命令目录、69 条命令页、27 制式规则、27 条 SGD、13 个状态码 |
 | `transport.py` | 257 | 编码仲裁（`^CI28`+UTF-8）、TCP、winspool RAW、ASCII 预览 |
-| `server.py` | 396 | 八个工具、SGD↔原生（`~HI`/`~HS`）状态回退 |
+| `server.py` | 407 | 八个工具、SGD↔原生（`~HI`/`~HS`）状态回退 |
 | `catalog.py` | 15 | 把手册目录注入校验器 |
-| `photo.py` | 345 | 照片→spec：找标签/透视校正、解码、几何映射、`^BY` 反推 |
+| `photo.py` | 400 | 照片→spec：找标签/透视校正、解码、几何映射、`^BY` 反推 |
+| `vision.py` | 179 | 可选视觉 LLM 通道（OpenAI 兼容 chat/completions） |
 | `ocr.py` | 242 | PP-OCRv4 det+rec（ONNX），DB 后处理 + CTC 解码 |
 | `xlsx_batch.py` | 185 | 标准库读 xlsx（zip+XML）、列解析、行→spec、Code128 宽度算居中、多标签单流 |
-| `tests/test_builder.py` | 336 | 29 组断言（位序、QR 前缀、`^A@`、编码、预览、知识库覆盖、xlsx 批量、逐轴坐标、照片→ZPL 几何与回环） |
+| `tests/test_builder.py` | 408 | 30 组断言（位序、QR 前缀、`^A@`、编码、预览、知识库覆盖、xlsx 批量、逐轴坐标、照片→ZPL 几何与回环） |
 
 ### 4.3 覆盖范围（能做的）
 

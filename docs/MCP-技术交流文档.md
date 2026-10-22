@@ -280,6 +280,19 @@ PowerShell `Get-Printer` 枚举（Name/PortName/DriverName/PrinterStatus/Shared�
 返回值里 `elements[]` 是给人复核的（`kind/format/text/dots/module_width/bar_height/hri`），`validation` 是
 `builder.validate_zpl` 的原样结果，`scale` 是本次 px→dot 的比例。
 
+识别通道二选一（`source` 字段会告诉你是哪条）：
+
+| 参数 | 缺省 | 说明 |
+|---|---|---|
+| `llm_url` | 空 → `ZEBRA_VISION_URL` | OpenAI 兼容端点，写到 `/v1` 即可（自动补 `/chat/completions`） |
+| `llm_key` | 空 → `ZEBRA_VISION_KEY` | 只用于一次 `Authorization: Bearer`，不回显/不落盘/不入返回值 |
+| `llm_model` | 空 → `ZEBRA_VISION_MODEL` → `qwen2.5-vl-7b-instruct` | 多数端点必须显式给自己的模型名 |
+| `vision_timeout` | 60 s | 单次识图请求超时 |
+
+模型只负责"字在哪、写的是什么"：返回 0–1 归一化框，像素→dot 仍在 `photo.py` 里换算。条码内容仍以
+zxing 为准，模型给的值仅在"一个都没解出来"时兜底并标 `BARCODE_UNVERIFIED` + `unverified: true`。
+HTTP 错误按 401/403/404/413/429 分类给提示，响应体截 400 字符并把 key 替换成 `***`。
+
 依赖是**可选 extras**：`pip install -e ".[photo]"`（opencv-python-headless / numpy / zxing-cpp /
 onnxruntime / pyclipper）。OCR 权重 15 MB 不入库：`ZEBRA_OCR_MODELS` 指目录，或放 `data/ocr/`
 （`ch_PP-OCRv4_det_infer.onnx`、`ch_PP-OCRv4_rec_infer.onnx`、`ppocr_keys_v1.txt`）。没装/没模型时
@@ -453,14 +466,15 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 | 文件 | 行数 | 核心内容 |
 |---|---|---|
-| `src/zebra_mcp/server.py` | 396 | FastMCP 入口、8 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
+| `src/zebra_mcp/server.py` | 407 | FastMCP 入口、8 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
 | `src/zebra_mcp/builder.py` | 713 | `build_label`（spec→ZPL）、`validate_zpl`、27 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
 | `src/zebra_mcp/transport.py` | 257 | `_clean_zpl` 编码仲裁、`send_tcp`、`list_windows_printers`、`send_windows_printer`（winspool RAW）、`ascii_preview`、`write_preview` |
 | `src/zebra_mcp/knowledge.py` | 337 | `COMMAND_NOTES`、`BARCODE_NOTES`、`SGD_COMMANDS`、`STATUS_NOTES`、`known_commands()` |
 | `src/zebra_mcp/catalog.py` | 15 | 把 253 命令目录注入 builder 校验器 |
-| `src/zebra_mcp/photo.py` | 345 | 照片→spec：标签定位/透视校正、zxing 解码、条高测量、HRI 按位置合并、px→dot 映射 |
+| `src/zebra_mcp/photo.py` | 400 | 照片→spec：标签定位/透视校正、zxing 解码、条高测量、HRI 按位置合并、px→dot 映射 |
+| `src/zebra_mcp/vision.py` | 179 | 可选视觉 LLM 通道：OpenAI 兼容请求、归一化框解析、key 不回显、错误分类 |
 | `src/zebra_mcp/ocr.py` | 242 | PP-OCRv4 det+rec（ONNX）：DB 后处理（阈值 0.3 / unclip 1.5）、CTC 解码、宽度夹取 |
-| `tests/test_builder.py` | 336 | 29 组断言（制式位序、QR 前缀、`^A@`、`^FH`、编码仲裁、预览、知识库覆盖、xlsx 批量、照片→ZPL 几何与回环） |
+| `tests/test_builder.py` | 408 | 30 组断言（制式位序、QR 前缀、`^A@`、`^FH`、编码仲裁、预览、知识库覆盖、xlsx 批量、照片→ZPL 几何与回环） |
 | `tests/fixtures/photo_sample.png` | — | 照片→ZPL 回归样张（480×320，Code128 `ABC123` + QR `NGSU` + `NANJING`） |
 | `scripts/mcp_probe.py` | 61 | 裸 JSON-RPC stdio 探针（不依赖 MCP SDK，一次一请求） |
 | `src/zebra_mcp/xlsx_batch.py` | 185 | 标准库读 xlsx、列定位、行→spec、Code128 宽度算居中、多标签单流 |

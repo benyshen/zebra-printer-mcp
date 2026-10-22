@@ -351,7 +351,8 @@ def print_xlsx(xlsx_path: str, name_column: str = "A", id_column: str = "B",
 def zpl_from_image(image_path: str, width_mm: float = 60.0, height_mm: float = 40.0,
                    dpi: int = 203, frame: str = "auto", use_ocr: bool = True,
                    font_file: str = "E:SIMSUN.TTF", host: str = "", port: int = 9100,
-                   dry_run: bool = True) -> str:
+                   dry_run: bool = True, llm_url: str = "", llm_key: str = "",
+                   llm_model: str = "", vision_timeout: float = 60.0) -> str:
     """Turn a photo of an existing label into ZPL (and optionally print it).
 
     Reconstruction, not design: symbols are decoded (zxing-cpp), text is read
@@ -366,6 +367,14 @@ def zpl_from_image(image_path: str, width_mm: float = 60.0, height_mm: float = 4
                  dots. A wrong size scales every element; the ASPECT warning
                  fires when the photo and label agree badly.
     use_ocr    : false to return symbols only (no text).
+    llm_url / llm_key / llm_model : optional vision LLM (OpenAI-compatible). Empty
+                 values fall back to ZEBRA_VISION_URL / ZEBRA_VISION_KEY /
+                 ZEBRA_VISION_MODEL. Pass them as arguments when the client can
+                 hold a key, or set the environment variables once at registration
+                 (README shows both). The key is used in one request header and is
+                 never echoed, logged, or written to disk. Barcode content still
+                 comes from zxing -- model-supplied values are marked
+                 BARCODE_UNVERIFIED.
 
     Returns {ok, zpl, elements[], warnings[], issues[], validation, zpl_file, sent?}.
     A 1D symbol needing under 2 dots per module is widened with a warning: at
@@ -373,7 +382,9 @@ def zpl_from_image(image_path: str, width_mm: float = 60.0, height_mm: float = 4
     """
     try:
         res = photo.convert(image_path, width_mm=width_mm, height_mm=height_mm,
-                            dpi=dpi, frame=frame, use_ocr=use_ocr, font_file=font_file)
+                            dpi=dpi, frame=frame, use_ocr=use_ocr, font_file=font_file,
+                            llm_url=llm_url, llm_key=llm_key, llm_model=llm_model,
+                            vision_timeout=vision_timeout)
     except FileNotFoundError:
         return _json({"error": f"image not found: {image_path}"})
     except Exception as exc:
