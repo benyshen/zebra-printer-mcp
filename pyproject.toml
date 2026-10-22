@@ -1,0 +1,18 @@
+[project]
+name = "zebra-printer-mcp"
+version = "0.1.0"
+description = "ZPL label generation + Zebra Link-OS printer control MCP server (Windows, stdio transport). Knowledge grounded in the ZPL II Programming Guide (zpl-zbi2-pg-en-202609)."
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.9,<2",
+]
+
+[project.scripts]
+zebra-printer-mcp = "zebra_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zebra_mcp"]

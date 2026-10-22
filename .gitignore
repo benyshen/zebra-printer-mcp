@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# editors
+.idea/
+.vscode/
+
+# runtime output
+*.prn
+*.zpl.preview
+data/test_send.zpl
+
+# Manual extractions derived from Zebra's copyrighted ZPL II Programming Guide
+# PDF. Rebuild with scripts/extract_manual.py (the small derived command
+# catalog data/command_catalog.txt IS committed; these bulk files are not).
+data/zpl_manual_full.txt
+data/zpl_command_secs.txt
+data/zpl_params_notes.txt
+*.pdf
