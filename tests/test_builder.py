@@ -317,6 +317,13 @@ try:
     assert syms["Code128"]["text"] == "ABC123", syms["Code128"]
     assert syms["QRCode"]["text"] == "NGSU", syms["QRCode"]
     # perspective-free mapping: px * (label_dots / image_width) == dots
+    # a QR must not be measured as a 1D bar band (that silently emitted ^BQ with
+    # blank magnification and 15-dot height); the module-level _TWO_D set holds
+    # zxing's CamelCase names, so nothing may shadow it with lowercase ones
+    qr = [e for e in res["elements"] if e["format"] == "QRCode"][0]
+    assert qr["kind"] == "barcode2d", qr
+    assert qr["dots"][3] - qr["dots"][1] > 50, qr["dots"]      # ~66 dots tall
+    assert "^BQ" in res["zpl"] and "^BQN,,3" in res["zpl"], res["zpl"]
     bar = [e for e in res["elements"] if e["kind"] == "barcode1d"][0]
     assert abs(bar["dots"][0] - 30) <= 3 and abs(bar["dots"][2] - 336) <= 4, bar["dots"]
     assert abs(bar["bar_height"] - 75) <= 4, bar

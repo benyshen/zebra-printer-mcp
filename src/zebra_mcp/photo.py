@@ -389,11 +389,12 @@ def convert(image: str | Path, *, width_mm: float = 60.0, height_mm: float = 40.
             "symbol_count": len(symbols), "text_count": len(texts)}
 
 
-_TWO_D = {"qrcode", "datamatrix", "pdf417", "micropdf417", "aztec", "maxicode", "hanxin"}
-
-
 def _is_2d_name(fmt: str | None) -> bool:
-    return bool(fmt) and str(fmt).replace("-", "").replace(" ", "").lower() in _TWO_D
+    """Same set as _TWO_D, tolerant of case and of 'QR-Code'-style spellings."""
+    if not fmt:
+        return False
+    key = str(fmt).replace("-", "").replace(" ", "").lower()
+    return any(key == n.replace("-", "").lower() for n in _TWO_D)
 
 
 def _mm(dots: float, dpi: int) -> float:
