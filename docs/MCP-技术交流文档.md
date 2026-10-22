@@ -1,7 +1,7 @@
 # Zebra 打印 MCP 服务器 — 技术交流文档
 
 **项目**：`zebra-printer-mcp` — ZPL 标签生成 + Zebra Link-OS 打印机控制的 stdio MCP 服务器
-**位置**：`E:\workspace\zebra-printer-mcp` ｜ **版本**：0.1.0 ｜ **环境**：Windows / Python ≥3.10（实测 3.14）
+**位置**：<https://github.com/benyshen/zebra-printer-mcp>（本地 `E:\workspace\zebra-printer-mcp`） ｜ **版本**：0.1.1 ｜ **环境**：Windows / Python ≥3.10（实测 3.14）
 **知识底座**：ZPL II Programming Guide（`zpl-zbi2-pg-en-202609.pdf`，全文抽取 44,030 行）+ Link-OS 文档（techdocs.zebra.com/link-os）
 **实机验证**：Zebra ZR668-200dpi（局域网 IP，9100 端口，固件 V86.20.21Z）— 网络打印、状态查询、中文打印全部跑通
 
@@ -20,7 +20,7 @@ LLM/Agent 要驱动一台 Zebra 标签打印机， ordinarily 需要：懂 ZPL I
 | 工具 | 一句话 |
 |---|---|
 | `generate_zpl` | JSON 标签描述（mm 坐标）→ 合法 ZPL II，内置手册默认值与范围校验 |
-| `validate_zpl` | 用从手册解析出的 **251 条命令目录** 静态校验任意 ZPL |
+| `validate_zpl` | 用从手册解析出的 **253 条命令目录** 静态校验任意 ZPL（含 QR 前缀检查） |
 | `zpl_knowledge` | 查命令语法/默认值/页码、条码制式目录、SGD 命令、状态码表 |
 | `list_printers` | 枚举 Windows 打印队列（定位 Zebra 驱动队列） |
 | `send_zpl` | 发送 ZPL：`tcp`(9100 raw) / `windows`(假脱机) / `usb` / `preview`，或 `dry_run` 只校验 |
@@ -70,7 +70,9 @@ LLM/Agent 要驱动一台 Zebra 标签打印机， ordinarily 需要：懂 ZPL I
 - **框架**：FastMCP（`mcp.server.fastmcp`），依赖钉 **`mcp>=1.9,<2`**——2.x 重构后该导入路径消失，
   这是本项目最重要的版本坑（见 §11）。
 - **协议版本协商**：客户端 `initialize` 携带 `protocolVersion`（实测 `2025-06-18` 正常），服务器回
-  `serverInfo: {name: "zebra-printer", version: "0.1.0"}`。
+  `serverInfo: {name: "zebra-printer", version: "1.30.0"}` —— **这里的 version 是 MCP SDK 的版本**，
+不是本包的版本（FastMCP 在 SDK 1.x 不接受 `version=` 参数，直接把 SDK 版本透出）。本包版本见
+`zebra_mcp.__version__`（当前 0.1.1）。
 - **返回值约定**：所有工具返回 JSON 字符串（`json.dumps(ensure_ascii=False, indent=2)`）放在
   `result.content[0].text`，客户端解析时要 **再 loads 一层**。
 
@@ -120,50 +122,89 @@ LLM/Agent 要驱动一台 Zebra 标签打印机， ordinarily 需要：懂 ZPL I
 | `media_tracking` `{mode,black_mark_offset}` | `^MN` | mode ∈ N/Y/W/M/B/A（p.307） |
 | `print_mode` `{mode,media_loss}` | `^MM` | mode ∈ T/P/R/A/K（p.305） |
 | `barcode_defaults` | `^BY` | 手册默认 width=2, ratio=3, height=10（p.239） |
-| `default_font` / `font_file` | `^A6` / `^A@` | font_file 见 §6 |
+| `default_font` | `^CF` | 全局默认字体 |
+| `font_file`（字段级） | `^A@` | 打印机内置/下载的 TrueType，见 §6 |
 | `fields[]` | 见下 | 顺序即发射顺序 |
 
-**字段类型**（`type`）：`text`（默认）、`barcode`、`qrcode`（独立类型，也支持 `type:"barcode"`+`symbology:"qrcode"`）、
-`note`（`^FB` 多行块）、`box`/`circle`（`^GB`）、`image`（`^GBD`）、`reverse`（`^GR` 反白包裹后续字段）。
+**字段类型**（`type`，对应 `builder.build_label` 的分派）：
 
-**坐标**：`x_mm/y_mm` 或 `x_dots/y_dots`（barcode/text 的 `height_pt`、`height_mm`、`module_width` 均可）。
+| type | 实际发射的 ZPL | 关键参数 |
+|---|---|---|
+| `text`（默认） | `^FO`/`^FT` → `^A0N` 或 `^A@` → (`^FB`) → (`^FH`) → `^FD` → `^FS` | `data`、`font` 或 `font_file`、`size_mm`、`block{}` |
+| `barcode` | `^FO` → `^B*` → (`^FH`) → `^FD` → `^FS` | `symbology`、`data`、`height_mm`、各制式专属项（见下） |
+| `note` / `box` | `^GB`（两者是同一命令，渲染函数已合并） | `thickness`、`color`(B/W)、`corner_rounding` |
+| `circle` | `^GC` | `diameter_mm`、`thickness` |
+| `reverse` | `^FR`（作用于后续字段） | — |
+| `image` | `^XGR:<name>,1,1`（图需先 `~DG` 下载到打印机） | `name` |
 
-**支持 25 种条码制式**（`BARCODE_CMDS`，手册 66–150 页逐条映射）：
-code128(`^BC` p.94)、code39(`^B3`)、code93、i2of5、pdf417(`^B7`)、micropdf417、datamatrix(`^BX`)、
-qrcode(`^BQ` p.128)、aztec、ean13/ean8/upca/upce、gs1databar、codabar、msi、plessey、code11、code49、
-codablock、planet、postnet/usps_im(`^BZ`)、upsmaxicode(`^BD`)、std2of5、logmars、upcext。
-每种制式的数据规则（i2of5 需偶数位数字、upca 11 位+校验、maxicode 62 字符集等）在 builder 和
-`zpl_knowledge mode=symbologies` 中都有。
+> `^FB` **不是**独立字段类型，而是 `text` 的子键 `block:{width_mm, lines, line_height, alignment}`。
+
+**坐标**：`x_mm/y_mm` 或 `x_dots/y_dots`（给 dots 就跳过换算）；尺寸同理用 `*_mm` / `*_dots`。
+条码高度用字段级 `height_mm`/`height_dots` 覆盖，全局默认走 `barcode_defaults`（`^BY`）。
+
+**支持 27 种条码制式**（`BARCODE_SPECS`，每种按手册 `Format: ^B…` 行确定字母位序）：
+code11(`^B1`)、code128(`^BC` p.94)、code39(`^B3`)、code93(`^BA`)、i2of5(`^B2`)、planet(`^B5`)、
+postnet(`^BZ` t=0)、usps(`^BZ` t=3)、upsmaxicode(`^BD`)、pdf417(`^B7`)、micropdf417(`^BF`)、
+codabar(`^BK`)、msi(`^BM`)、plessey(`^BP`)、logmars(`^BI`)、std2of5(`^BJ`)、ean13(`^BE`)、
+ean8(`^B8`)、upca(`^B9`)、upce(`^B0`)、upcext(`^BS`)、gs1databar(`^BR`)、code49(`^B4`)、
+codablock(`^BB`)、datamatrix(`^BX`)、qrcode(`^BQ` p.128)、aztec(`^BO`)。
+
+各制式专属参数（不通用，位置也不同）：
+
+| 制式 | 专属键 | 说明 |
+|---|---|---|
+| `qrcode` | `scale`(c) `ec_level`(d) `model`(b) `mask`(e) `input_mode` | 纠错级与输入模式会写进 `^FD` 前缀 |
+| `datamatrix` | `module_size_dots`(h) `quality`(s) `columns`(c) `rows`(r) | quality 只能 0/50/80/100/140/200 |
+| `pdf417` | `security_level`(s) `columns`(c) `row_ratio`(r) | columns=1 为自适应 |
+| `micropdf417` | `mode`(m) 0–33 | **不是** PDF417 的 s/c/r |
+| `gs1databar` | `symbology_type`(b) `magnification`(c) `separator_height`(d) `height_mm`(e) `segment_width`(f) | 高度在 `e` 位，不在 `h` |
+| `code49` | `interpret_pos`(f) `mode`(m) | f 只接受 N/A/B |
+| `codablock` | `security`(s) `columns`(c) `rows`(r) `mode`(m) | mode ∈ A/E/F |
+| `codabar` | `start_char`(k) `stop_char`(l) | A–D |
+| `upsmaxicode` | `mode`(m) `symbol_number`(n) `total_symbols`(t) | 无 orientation 参数 |
+| `msi` | `check_digit`(e) `insert_check_digit`(E) | e ∈ A/B/C/D |
+
+数据规则（i2of5 偶数位、upca 11+校验、postal 纯数字等）builder 会以 `issues` 返回；
+制式总表可用 `zpl_knowledge(mode="barcodes")` 查，命令语法用 `zpl_knowledge(mode="command")` 查。
 
 **ZPL 发射规则**（全部经手册核对，也是与"凭记忆写 ZPL"的模型对话时最常纠正的点）：
 - 条码命令按 **Format 行字母顺序**逗号分隔发射，尾部缺省省略、中段缺省留空位——合法形如 `^BCN,,Y`。
 - 字段坐标 `^FO` 必须先于条码/数据命令发射（p.201）——否则多条码全部叠在原点。
 - hex 转义生效时在 `^FD` 前发 `^FH`。
-- 二维码 `^BQ` 走 scale/model/纠错参数（p.128）。
+- **`^BQ` 的 `^FD` 必须以 `<纠错级><输入模式>,` 开头**（p.129 写死 Mandatory）：`^FDQA,数据`。
+  漏掉前缀打印机把数据前两个字符当开关吃掉——实测 `^FDhttps://…` 解出来是 `ps://…`（少 `htt`）。
 
-### 4.2 `validate_zpl(zpl) -> {issues[], command_count}`
+### 4.2 `validate_zpl(zpl) -> {issues[], ok}`
 
-静态校验三层：
-1. 提取 payload 中全部 `^XY`/`~XY` 双字符 token，对照 **251 条手册命令目录**，未命中 → `UNKNOWN_CMD` warning；
-2. `^XA`/`^XZ` 配对检查（不配对 → error，p.370/375）；
-3. 完全无 ZPL 命令 → warning。
+静态校验四层（`ok = 无 error`）：
+1. **先抹掉 `^FD…` 数据段再扫命令**——标签内容里出现的 `~`、`^`（如 `100~200 SALE`）不是命令，不能被误报；
+2. 提取 `^XY`/`~XY`/`^A@` token，对照 **253 条手册命令目录**，未命中 → `UNKNOWN_CMD`（warning）；
+3. `^BQ` 的 `^FD` 不是 `<纠错级><输入模式>,` 开头 → `QR_FD_PREFIX`（error，p.129）——
+   这是"语法全对但码扫不出来"唯一能在静态检查里抓住的错；
+4. `^XA`/`^XZ` 配对（error，p.370/375）；payload 完全没有命令 → warning。
 
 干净 ZPL 零误报（`^ZZ` 这类冷命令也在目录内——目录来自手册全文抽取，不是手写白名单）。
 
-### 4.3 `zpl_knowledge(query, mode)`
+### 4.3 `zpl_knowledge(mode="command", query="")`
 
 | mode | 查什么 | 例 |
 |---|---|---|
-| `command`（默认） | `^`命令语法/默认值/页码 | `query="barcode"` 搜名称+notes |
-| `barcode` | 条码制式数据规则 | `query="maxicode"` |
-| `sgd` | Link-OS SGD 命令目录 | `query="calibration"` |
+| `command`（默认） | 单条命令的语法/默认值/范围/页码；查不到时给 `similar` 建议 | `query="^B9"` |
+| `search` | 在命令名称+notes+syntax 上正则搜（最多 25 条） | `query="darkness|speed"` |
+| `barcodes` | 27 种制式的数据规则 + `supported_by_generate_zpl` + `^BY` 默认值 | 空 query |
+| `sgd` | Link-OS SGD 命令目录（可按名字过滤） | `query="calibration"` |
 | `status` | `~HS` 状态码表 | `0000=READY, 0002=HEAD OPEN, 0003=PAPER OUT, 8000=TOO HOT…` |
-| `symbologies` | 25 种制式总表 | 空 query |
+| `list` | 全部 253 条命令 token | 空 query |
+
+`COMMAND_NOTES` 共 69 条：手写的通用命令（`^FO`/`^A`/`^CI`/`~DG`…）+ **由 `BARCODE_SPECS` 自动生成的
+条码命令页**（页码与 Format 行同源，避免"能发射、查不到"）。
 
 ### 4.4 `list_printers()`
 
 PowerShell `Get-Printer` 枚举（Name/PortName/DriverName/PrinterStatus/Shared）。
-用 PowerShell 而非 ctypes winspool 的原因：win32print 在部分 Python 构建里直接段错误（实测 exit 139）。
+用 PowerShell 而非 ctypes winspool **枚举**的原因：win32print 在部分 Python 构建里直接段错误（实测 exit 139）——
+但**发送**相反，ctypes `WritePrinter` 是唯一可靠的 RAW 通道（见 §4.5）。
+命令前缀 `[Console]::OutputEncoding=UTF8`，否则中文队列名在 powershell.exe 输出里会变成乱码，`_find_printer` 匹配不上。
 
 ### 4.5 `send_zpl(zpl, transport_kind, dry_run, host, port, printer, preview_name)`
 
@@ -197,6 +238,7 @@ PowerShell `Get-Printer` 枚举（Name/PortName/DriverName/PrinterStatus/Shared�
 | 状态（`~HS`） | 接口 159（网络）；缺纸/暂停/缓冲满/温度全 0；标签长 315 dots ≈ 39.4 mm；`0000 = PRINTER READY` |
 | TCP 打印 | 多张 Code128+QR+文本标签，`send_tcp` `ok=True, 105 bytes`，零错误回显 |
 | MCP 端到端 | `generate_zpl` → `send_zpl(tcp)` 中文标签 `ok=True, 234 bytes` |
+| 复检后复打 | 中文(`^A@N,28,28`)+QR+`^B9R,63`+边框 → `ok=True, 195 bytes`，零回显，`~HS 0000` |
 | 固件目录 | web 后台 `/dir?dev=E:&otype=.TTF` 列出：`E:SIMSUN.TTF`、`E:HANS.TTF`、`E:TT0003M_.TTF` |
 
 ---
@@ -286,6 +328,7 @@ uv pip install --python .venv\Scripts\python.exe -e .
 |---|---|---|
 | 单元 | `tests/test_builder.py`：17 组断言——默认值/范围、27 种制式的 Format 位序、QR `^FD` 前缀、`^A@` 中文、`^FH` 转义、`^FB`、图形、编码仲裁、validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报、`^FD` 数据不误报） | `ALL TESTS PASSED` |
 | 协议 | stdio 探针（initialize→initialized→tools/list→tools/call 逐条驱动） | 6 工具全通 |
+| 语义/渲染 | Labelary 渲染 PNG → opencv `QRCodeDetector` 解码（本地没有扫枪时的等价验证） | `^FDQA,…` 解出原串；旧写法 `^FDhttps://…` 解出 `ps://…`（少 `htt`） |
 | 实机 | TCP 9100 打印、`~HI/~HS`、web 目录、中文字体对比标签 | 全部通过（ZR668） |
 | 编译 | `py_compile` 全模块 | 通过 |
 
@@ -319,6 +362,9 @@ uv pip install --python .venv\Scripts\python.exe -e .
 13. **参数位序要看各自手册 Format 行，不能套用 `^BCo,h,f,g` 的习惯**：`^B9o,h,f,g,e`、`^B0o,e,h,f,g`、`^BRa,b,c,d,e,f`、`^BQa,b,c,d,e`、`^BFo,h,m`。把 orientation 塞进不存在的 `o` 位（或按别的制式顺序拼 `a,c,b,d,e`），打印出来是校验位/列数乱序，甚至 KeyError 崩在服务端。builder 现在按 `BARCODE_SPECS[..]["letters"]` 逐制式发射。
 14. **`Print-File` 不是通用 cmdlet**（本机 `Get-Command Print-File` 为空，只有 `Out-Printer`，而 `Out-Printer` 发的是文本）。Windows raw 打印只有一条正路：`winspool.drv` 的 `OpenPrinter → StartDocPrinter(RAW) → WritePrinter`。
 15. **多行 SGD 响应不能"读到第一个 `\r\n` 就停"**——`! U1 getvar "$~"` 是几百行，早停只拿到第一行；改成短空闲超时（0.6s）读到打印机不再吐字节。
+16. **`^A@` 的宽度位别留空**：`^A@N,28,,E:SIMSUN.TTF` 在某些固件上按 0 处理（字形退化成极窄），显式给 `o,h,w` 才确定；CJK 用方形字形，宽度=高度即可。
+17. **知识库与构建器必须同源**：条码命令的页码/Format 行现在由 `BARCODE_SPECS` 生成 `COMMAND_NOTES`，新增制式只改一处，否则会出现"能发射、`zpl_knowledge` 查不到"。
+18. **`validate_zpl` 通过 ≠ 码能扫**：命令名、配对、参数范围都查不出语义错（QR 前缀就是典型）。静态校验只能抓形式，语义要靠"渲染 + 解码"闭环——本项目的做法是 Labelary 渲染 PNG 后用 opencv `QRCodeDetector` 解一遍，和打印出来的码等价。
 
 ---
 
@@ -326,13 +372,17 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 | 文件 | 行数 | 核心内容 |
 |---|---|---|
-| `src/zebra_mcp/server.py` | 288 | FastMCP 入口、6 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
+| `src/zebra_mcp/server.py` | 291 | FastMCP 入口、6 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
 | `src/zebra_mcp/builder.py` | 679 | `build_label`（spec→ZPL）、`validate_zpl`、27 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
 | `src/zebra_mcp/transport.py` | 257 | `_clean_zpl` 编码仲裁、`send_tcp`、`list_windows_printers`、`send_windows_printer`（winspool RAW）、`ascii_preview`、`write_preview` |
 | `src/zebra_mcp/knowledge.py` | 337 | `COMMAND_NOTES`、`BARCODE_NOTES`、`SGD_COMMANDS`、`STATUS_NOTES`、`known_commands()` |
-| `src/zebra_mcp/catalog.py` | 13 | 把 251 命令目录注入 builder 校验器 |
+| `src/zebra_mcp/catalog.py` | 13 | 把 253 命令目录注入 builder 校验器 |
+| `tests/test_builder.py` | 243 | 17 组断言（制式位序、QR 前缀、`^A@`、`^FH`、编码仲裁、预览、知识库覆盖） |
+| `scripts/mcp_probe.py` | 61 | 裸 JSON-RPC stdio 探针（不依赖 MCP SDK，一次一请求） |
+| `scripts/extract_manual.py` | 78 | 从 ZPL II 手册 PDF 重建 `data/` 派生文件（不入库，版权原因） |
 | `data/zpl_manual_full.txt` | 44,030 | ZPL II 手册全文（一切默认值的出处） |
 
 ---
 
-*文档生成于 2026-10-22；所有实测数据来自一台 ZR668-200dpi 实机（局域网 9100）与 MCP stdio 探针。*
+*文档生成于 2026-10-22，同日全量复检后修订（条码位序、QR 前缀、RAW 通道、校验器四层）；
+所有实测数据来自一台 ZR668-200dpi 实机（局域网 9100）、MCP stdio 探针，以及 Labelary 渲染 + opencv 解码验证。*

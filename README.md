@@ -53,9 +53,12 @@ uv venv .venv --python 3.12      # 或 python -m venv .venv
 }
 ```
 
-坐标默认 mm（`x_mm/y_mm`），也可给 `x_dots/y_dots`。条码制式 25 种：code128/code39/code93/
-i2of5/upca/upce/ean13/pdf417/datamatrix/qrcode/aztec/codabar/msi/code11…（见
-`zpl_knowledge mode=symbologies`）。
+坐标默认 mm（`x_mm/y_mm`），也可给 `x_dots/y_dots`。条码制式 27 种：code128/code39/code93/code11/
+i2of5/upca/upce/ean13/pdf417/micropdf417/datamatrix/qrcode/aztec/codabar/msi/code49/codablock/
+gs1databar/upsmaxicode…（见 `zpl_knowledge mode=barcodes`）。
+
+二维码的 `^FD` 会自动加手册要求的前缀（`^FDQA,` = 纠错级 Q + 自动输入模式）；漏掉前缀打印机会
+把数据前两个字符当开关吃掉，实测会把 `https://…` 编成 `ps://…`。
 
 ## 中文打印（ZR668 实机验证）
 

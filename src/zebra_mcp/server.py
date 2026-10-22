@@ -22,6 +22,9 @@ from mcp.server.fastmcp import FastMCP
 from . import builder, knowledge, transport
 from . import catalog  # noqa: E402  (installs manual catalog into builder.validate_zpl)
 
+# FastMCP in MCP SDK 1.x takes no version kwarg; serverInfo.version therefore
+# reports the SDK's own version (1.30.0 here), while the package version lives
+# in zebra_mcp.__version__ (0.1.1). Documented as such in docs/.
 mcp = FastMCP(
     "zebra-printer",
     instructions=(
