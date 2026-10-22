@@ -12,7 +12,7 @@
 
 | | 说明 |
 |---|---|
-| **是** | 一个本地 **stdio MCP server**（不是 HTTP 服务、不是云端 API），把"生成 ZPL / 校验 ZPL / 查手册 / 列打印机 / 发送 / 查状态"六件事封成六个工具 |
+| **是** | 一个本地 **stdio MCP server**（不是 HTTP 服务、不是云端 API），把"生成 ZPL / 校验 ZPL / 查手册 / 列打印机 / 发送 / 查状态 / 按表格批量打"七件事封成七个工具 |
 | **是** | 知识来源固定：ZPL II 编程手册（`zpl-zbi2-pg-en`）的 253 条命令目录、27 种条码制式的 Format 行页码——答案可回溯到手册页，不是模型记忆 |
 | **不是** | 打印中间件：没有队列管理、没有重试与审计、没有多机调度 |
 | **不是** | 标签设计器：不做版式拖拽、不做图像半色调、不做套印对齐 |
@@ -55,7 +55,7 @@ ZPL 是**无校验的文本协议**：语法错了打印机会照样吃，版式
 ### 2.3 三条额外的工程收益
 
 1. **手册可溯源**：`zpl_knowledge(mode="command", query="^BR")` 直接给语法、默认值、页码——模型"查"而不是"猜"，答案能被人核对。
-2. **确定性可审计**：同 spec 同字节 → 可以放进 git、可以写断言、可以对比新旧模板差异（本项目 18 组断言就是这么锁的）。
+2. **确定性可审计**：同 spec 同字节 → 可以放进 git、可以写断言、可以对比新旧模板差异（本项目 27 组断言就是这么锁的）。
 3. **无网络暴露面**：stdio 本地子进程，不监听端口、不需要 token、不出网。企业内网里这是最容易过审的形态。
 
 ---
@@ -154,11 +154,44 @@ Hermes 写 config 时 JSON 路径用**正斜杠**，且别直接手改 `config.y
 > 静区、模块宽、纠错级这类"版式物理约束"工具不会替你检查——它们不违反 ZPL 语法，却直接决定能不能扫。
 > 唯一可靠的验收是**打一张扫一张**（或用本文的渲染 + 解码法）。
 
+### 3.5 批量：给一个 `.xlsx`，一行一张标签
+
+`print_xlsx` 把"表格 → 标签"整段包了：读第一张（或指定）工作表，取两列，一行一张标签。姓名用
+`^FB …,C` 由**打印机按真实字体度量**居中；工号打成 Code 128，宽度按 `11×(n+2)+13` 个模块算出来再居中对齐
+（`^BC` 没有对齐参数，只能算）。
+
+```text
+print_xlsx(xlsx_path="D:/名单.xlsx",
+           name_column="姓名",     # 也可以 "A" 或 1
+           id_column="员工号",     # 也可以 "B" 或 2
+           width_mm=50, height_mm=30,
+           name_size_mm=4, barcode_height_mm=10, module_width=3,
+           dry_run=False, host="<打印机IP>")
+```
+
+返回 `{labels, rows_read, bytes, issues[], zpl_file, first_label, sent}`。`rows_read` 与 `labels` 的差
+就是被跳过的行（工号为空不打）；`issues` 里每条都带 `label` 序号，能定位到第几张。
+
+三条要点：
+
+- **一次连接发整批**：所有标签拼成**一个 ZPL 流**（每张一个 `^XA…^XZ` 块），打印机回显只读一次。
+  实测 5 张 **1.03 s**；逐张调用就是 5×1 s。表里有 500 行时这是 8 分钟和 1 分钟的差别。
+- **中文列要有字体**：`name_size_mm` 决定 `^A@` 的高度，默认 `E:SIMSUN.TTF`。机型没有该字体时
+  `issues` 会报 `CI_CJK`——不是错误，是提醒你换字体名。
+- **只吃 `.xlsx`/`.xlsm`**：用标准库解 zip+XML，不带 openpyxl 依赖。`.xls` 请先在 Excel 里另存。
+
+不想让模型经手时，命令行同款：
+
+```bash
+python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 --dry-run
+python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 --execute --host <打印机IP>
+```
+
 ---
 
 ## 4. 能实现的功能模块
 
-### 4.1 六个工具（对外能力面）
+### 4.1 七个工具（对外能力面）
 
 | 工具 | 入参 | 返回 | 实测耗时 | 依赖 |
 |---|---|---|---|---|
@@ -168,6 +201,7 @@ Hermes 写 config 时 JSON 路径用**正斜杠**，且别直接手改 `config.y
 | `list_printers` | — | 队列名/端口/驱动/状态 | 0.3–1 s | Windows PowerShell |
 | `send_zpl` | `zpl`、`transport_kind`(tcp/windows/usb/preview)、`host`/`printer`/`port`、`dry_run` | 发送结果 + 回显 | ≈1.0 s（tcp） | 网络或队列 |
 | `printer_status` | `host`、`port`、`sgd`、`timeout` | `{identification(~HI), status(~HS 第3行), sgd{}, native_status}` | ≈3.9 s | 网络 |
+| `print_xlsx` | `xlsx_path`、`name_column`/`id_column`（字母/序号/表头名）、尺寸与 `dry_run` | `{labels, rows_read, bytes, issues[], zpl_file, first_label, sent}` | 5 张 ≈1.0 s（单流） | 读 xlsx 用标准库，发送走 TCP |
 
 ### 4.2 内部模块（改代码时才关心）
 
@@ -176,9 +210,10 @@ Hermes 写 config 时 JSON 路径用**正斜杠**，且别直接手改 `config.y
 | `builder.py` | 685 | spec→ZPL（含 27 制式 `BARCODE_SPECS`、图形、单位换算、范围校验、`validate_zpl`） |
 | `knowledge.py` | 337 | 253 命令目录、69 条命令页、27 制式规则、27 条 SGD、13 个状态码 |
 | `transport.py` | 257 | 编码仲裁（`^CI28`+UTF-8）、TCP、winspool RAW、ASCII 预览 |
-| `server.py` | 294 | 六个工具、SGD↔原生（`~HI`/`~HS`）状态回退 |
+| `server.py` | 354 | 七个工具、SGD↔原生（`~HI`/`~HS`）状态回退 |
 | `catalog.py` | 15 | 把手册目录注入校验器 |
-| `tests/test_builder.py` | 256 | 18 组断言（位序、QR 前缀、`^A@`、编码、预览、知识库覆盖） |
+| `xlsx_batch.py` | 185 | 标准库读 xlsx（zip+XML）、列解析、行→spec、Code128 宽度算居中、多标签单流 |
+| `tests/test_builder.py` | 306 | 27 组断言（位序、QR 前缀、`^A@`、编码、预览、知识库覆盖、xlsx 批量与逐轴坐标） |
 
 ### 4.3 覆盖范围（能做的）
 
@@ -200,9 +235,10 @@ Hermes 写 config 时 JSON 路径用**正斜杠**，且别直接手改 `config.y
 |---|---|---|
 | **Agent / 聊天里随口出标签** | 模型只需填 spec，不需要 ZPL 知识；`issues[]` 让它自己改对 | "打一张 70×40 的，标题是这批货号，右下角二维码指向这条链接" |
 | **参数化小批量** | 模板固定、只变 `data`，spec 短、输出确定 | 一天几十张 SKU/批次/序列号标签 |
+| **表格批量**（名单/工号/资产编号） | `print_xlsx` 一次读表出整批，单连接单回显 | 给一个 xlsx：一列姓名、一列工号打 128 码，居中 |
 | **现场调试**（手边没有 BarTender，只有一台网口打印机） | TCP 直发 + 回显 + `printer_status`，不装驱动 | "打印机打不出来，先看状态字" |
 | **中文标签** | 编码与字体配方已封装，实测过 | 中文品名 + 条码 + 二维码一张出 |
-| **标签模板治理** | 同 spec 同字节 → 可 diff、可回归、可 code review | 把标签当代码管，改模板跑 18 组断言 |
+| **标签模板治理** | 同 spec 同字节 → 可 diff、可回归、可 code review | 把标签当代码管，改模板跑 27 组断言 |
 | **教学 / 技术交流** | `zpl_knowledge` 让"手册"变成可问的对象；错误码能把坑讲清楚 | 现场演示"错一位参数会发生什么" |
 | **给业务系统加个 AI 出口**（MES/ERP 助手） | 业务侧只给结构化字段，打印细节不外泄 | 拣货完成 → 自动出箱标 |
 | **多模型混用** | 工具契约稳定，换模型不改调用方 | Claude/DeepSeek/GPT 共用一套 |
@@ -237,6 +273,7 @@ Hermes 写 config 时 JSON 路径用**正斜杠**，且别直接手改 `config.y
 | `validate_zpl` | ≈0.15 ms | 253 条目录逐 token 比对 |
 | `send_zpl(tcp)` | **≈1.0 s** | 大头是等打印机回显（错误文本）的空闲窗口，不是网络慢 |
 | `printer_status` | **≈3.9 s** | 4 条 SGD（本机型回 `?`）+ `~HI`/`~HS` 两条原生；复检时从 13.4 s 优化到 3.9 s |
+| `print_xlsx`（5 张） | **≈1.0 s** | 整批一个流；500 张同样是"1 次连接 + 1 次回显"，瓶颈变成打印速度而非调用次数 |
 | `list_printers` | 0.3–1 s | PowerShell 枚举，进程启动占大头 |
 
 **吞吐结论**：串行 ≈1 张/秒，且**没有内建并发**。要更快就绕开"等回显"（把回显窗口调小或做长连接），这属于改造而不是配置。

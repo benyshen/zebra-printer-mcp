@@ -455,16 +455,24 @@ def _render_circle(f: dict, dpi: int) -> str:
 
 
 def _xy(f: dict, dpi: int) -> tuple[int, int]:
-    if "x_dots" in f:
-        return int(f["x_dots"]), int(f.get("y_dots", 0))
-    return (mm2dots(f.get("x_mm", 0), dpi), mm2dots(f.get("y_mm", 0), dpi))
+    """Per-axis: dots win on that axis only, the other axis still honours mm.
+
+    Mixing (x_dots with y_mm) is legitimate -- e.g. centring a barcode needs an
+    exact dot offset horizontally while the vertical position is a layout number
+    in mm. Treating "x_dots present" as "ignore y" silently dropped the barcode
+    to y=0.
+    """
+    x = int(f["x_dots"]) if "x_dots" in f else mm2dots(f.get("x_mm", 0), dpi)
+    y = int(f["y_dots"]) if "y_dots" in f else mm2dots(f.get("y_mm", 0), dpi)
+    return x, y
 
 
 def _xywh(f: dict, dpi: int) -> tuple[int, int, int, int]:
+    """Same per-axis rule as _xy (dots win per dimension, mm for the rest)."""
     x, y = _xy(f, dpi)
-    if "width_dots" in f:
-        return x, y, int(f["width_dots"]), int(f.get("height_dots", 1))
-    return (x, y, mm2dots(f.get("width_mm", 0), dpi), mm2dots(f.get("height_mm", 0), dpi))
+    w = int(f["width_dots"]) if "width_dots" in f else mm2dots(f.get("width_mm", 0), dpi)
+    h = int(f["height_dots"]) if "height_dots" in f else mm2dots(f.get("height_mm", 0), dpi)
+    return x, y, w, h
 
 
 def mm2dots(mm, dpi: int) -> int:

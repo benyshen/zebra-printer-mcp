@@ -9,17 +9,19 @@ and the Link-OS docs at https://techdocs.zebra.com/link-os/latest/):
   list_printers        enumerate Windows printer queues
   send_zpl             send ZPL over TCP 9100 / Windows queue / USB queue / preview file
   printer_status       query a Link-OS printer via SGD (! U1 getvar) over TCP
+  print_xlsx           one label per .xlsx row (text column + Code 128 column, centred)
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import socket
 import sys
 
 from mcp.server.fastmcp import FastMCP
 
-from . import builder, knowledge, transport
+from . import builder, knowledge, transport, xlsx_batch
 from . import catalog  # noqa: E402  (installs manual catalog into builder.validate_zpl)
 
 # FastMCP in MCP SDK 1.x takes no version kwarg; serverInfo.version therefore
@@ -284,6 +286,64 @@ def printer_status(host: str, port: int = 9100, sgd: str = "", timeout: float = 
                       "error": f"{type(e).__name__}: {e}",
                       "hint": "find the printer IP via list_printers/Windows or the printer LCD; "
                               "SGD needs the raw 9100 port (Link-OS)"})
+
+
+@mcp.tool()
+def print_xlsx(xlsx_path: str, name_column: str = "A", id_column: str = "B",
+               sheet: str = "", host: str = "", port: int = 9100,
+               width_mm: float = 50.0, height_mm: float = 30.0,
+               name_size_mm: float = 4.0, barcode_height_mm: float = 10.0,
+               module_width: int = 3, skip_header: bool = True,
+               max_labels: int = 2000, dry_run: bool = False) -> str:
+    """Print one label per row of an .xlsx: a text column and a Code 128 column, both centred.
+
+    Columns are given as an Excel letter ("A", "C"), a 1-based index ("2"), or a
+    header name ("姓名"). The first row is treated as a header unless
+    skip_header=false. Rows whose id cell is empty are skipped.
+
+    Layout: the name is centred by the printer itself (^FB ... C, real font
+    metrics, needs a CJK-capable font such as E:SIMSUN.TTF for Chinese); the
+    barcode is centred arithmetically (^BC has no alignment), so its module
+    width must match the real data — Code 128 in set B is 11*(n+2)+13 modules.
+
+    All labels go out as ONE ZPL stream over a single TCP connection: the printer
+    echo is read once instead of once per label (5 labels = 1.0 s, not 5 s).
+
+    Returns {labels, rows_read, skipped, bytes, issues[], zpl_file, first_label,
+    sent:{ok,transport,...}}. dry_run=true writes the .zpl and stops.
+    """
+    if not xlsx_path.lower().endswith((".xlsx", ".xlsm")):
+        return _json({"error": f"{xlsx_path}: only .xlsx/.xlsm is supported (not .xls)"})
+    try:
+        rows = xlsx_batch.read_xlsx_rows(xlsx_path, sheet or None)
+    except FileNotFoundError:
+        return _json({"error": f"file not found: {xlsx_path}"})
+    except Exception as exc:
+        return _json({"error": f"{type(exc).__name__}: {exc}"})
+    if not rows:
+        return _json({"error": "sheet is empty"})
+
+    specs = xlsx_batch.plan_specs(
+        rows, name_column, id_column, width_mm=width_mm, height_mm=height_mm,
+        name_size_mm=name_size_mm, barcode_height_mm=barcode_height_mm,
+        module_width=module_width, skip_header=skip_header)
+    if not specs:
+        return _json({"error": f"no printable rows (id column {id_column!r} is empty everywhere)"})
+    if len(specs) > max_labels:
+        return _json({"error": f"{len(specs)} labels exceeds max_labels={max_labels}; "
+                               "raise it explicitly if that is intended"})
+
+    job, issues = xlsx_batch.build_job(specs)
+    zpl_file = str(xlsx_batch.write_job(job, transport.SCRATCH / f"xlsx_job_{os.getpid()}.zpl"))
+    base = {"labels": len(specs), "rows_read": len(rows), "columns": {"name": name_column, "id": id_column},
+            "bytes": len(job.encode("utf-8")), "issues": issues, "zpl_file": zpl_file,
+            "first_label": job.split("^XZ")[0] + "^XZ"}
+    if dry_run or not host:
+        base["dry_run"] = True
+        base["hint"] = "pass host=<printer IP> to actually print over TCP"
+        return _json(base)
+    base["sent"] = transport.send_tcp(host, job, port)
+    return _json(base)
 
 
 def main() -> None:

@@ -27,7 +27,7 @@ uv venv .venv --python 3.12      # 或 python -m venv .venv
 
 > **必须 `mcp<2`**：2.x 移除了 `mcp.server.fastmcp`，pyproject 已钉 `mcp>=1.9,<2`。
 
-## 6 个 MCP 工具
+## 7 个 MCP 工具
 
 | 工具 | 作用 |
 |---|---|
@@ -37,6 +37,7 @@ uv venv .venv --python 3.12      # 或 python -m venv .venv
 | `list_printers` | 枚举 Windows 打印队列（找 Zebra 队列） |
 | `send_zpl` | 发送：`tcp`(9100 raw) / `windows`(假脱机) / `usb` / `preview`；`dry_run` 只校验+预览 |
 | `printer_status` | 查询打印机状态：Link-OS SGD 优先，老固件自动回退原生 `~HI`/`~HS` |
+| `print_xlsx` | 读 `.xlsx` 两列（姓名 + 员工号），一行一张标签、文本与 128 码各自居中，整批一个 ZPL 流 |
 
 ## label spec 示例（generate_zpl 入参）
 
@@ -61,6 +62,19 @@ gs1databar/upsmaxicode…（见 `zpl_knowledge mode=barcodes`）。
 
 二维码的 `^FD` 会自动加手册要求的前缀（`^FDQA,` = 纠错级 Q + 自动输入模式）；漏掉前缀打印机会
 把数据前两个字符当开关吃掉，实测会把 `https://…` 编成 `ps://…`。
+
+## 表格批量：给一个 .xlsx，一行一张标签
+
+```text
+print_xlsx(xlsx_path="D:/名单.xlsx", name_column="姓名", id_column="员工号",
+           width_mm=50, height_mm=30, dry_run=False, host="<打印机IP>")
+```
+
+- 列可写成 Excel 字母（`"A"`/`"B"`）、1 基序号（`1`/`2`）或表头文字（`"员工号"`）；首行当表头。
+- 姓名用 `^FB …,C` 由打印机居中；工号打 Code128 并按 `11×(n+2)+13` 个模块算宽度居中（`^BC` 没有对齐参数）。
+- 整批拼成**一个 ZPL 流、一次 TCP 连接**：打印机回显只读一次（5 张 ≈1.0 s，不是 5 s）。
+- 只支持 `.xlsx/.xlsm`（标准库解 zip，无 openpyxl 依赖）；`.xls` 请先另存。
+- 命令行孪生：`python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 [--execute --host <IP>]`
 
 ## 中文打印（ZR668 实机验证）
 

@@ -16,7 +16,7 @@ LLM/Agent 要驱动一台 Zebra 标签打印机， ordinarily 需要：懂 ZPL I
 让模型凭记忆写 ZPL，常见的后果是：条码参数顺序错、中文变 `?`、相对量指令（`^MD`）跨任务累积、
 对老固件发它不支持的 SGD。
 
-本服务器把这些能力封装成 **6 个 MCP 工具**，让任何 MCP 客户端（Hermes、Claude Desktop、Codex 等）
+本服务器把这些能力封装成 **7 个 MCP 工具**，让任何 MCP 客户端（Hermes、Claude Desktop、Codex 等）
 通过 JSON-RPC 安全地生成、校验、发送标签并查询打印机：
 
 | 工具 | 一句话 |
@@ -27,6 +27,7 @@ LLM/Agent 要驱动一台 Zebra 标签打印机， ordinarily 需要：懂 ZPL I
 | `list_printers` | 枚举 Windows 打印队列（定位 Zebra 驱动队列） |
 | `send_zpl` | 发送 ZPL：`tcp`(9100 raw) / `windows`(假脱机) / `usb` / `preview`，或 `dry_run` 只校验 |
 | `printer_status` | 探活 + 状态 + SGD 查询/设置（内置老固件 `~HI/~HS` 回退） |
+| `print_xlsx` | 读 `.xlsx` 两列（文本 + Code128），一行一张标签、各自居中，整批一个 ZPL 流 |
 
 设计原则：**每一条校验和默认值都有手册页码背书**（builder 的 issue 消息里直接带 `^PW p.329` 这类引用），
 出问题可以回溯到手册原文核对。
@@ -103,7 +104,7 @@ LLM/Agent 要驱动一台 Zebra 标签打印机， ordinarily 需要：懂 ZPL I
 
 ---
 
-## 4. 六个工具详解
+## 4. 七个工具详解
 
 ### 4.1 `generate_zpl(label_spec) -> {zpl, issues[]}`
 
@@ -229,6 +230,29 @@ PowerShell `Get-Printer` 枚举（Name/PortName/DriverName/PrinterStatus/Shared�
   （`{code, name, level}`，如 `{"code":"0000","name":"PRINTER READY","level":"ok"}`），`native_status` 保留原始回包。
 - 传 `sgd` → 原样下发 `! U1 …`（getvar/setvar/do），`SGD_COMMANDS` 目录是查询起点。
 
+### 4.7 `print_xlsx(xlsx_path, name_column, id_column, ...) -> {labels, rows_read, issues[], zpl_file, first_label, sent}`
+
+表格 → 标签的整段封装，实现放在 `xlsx_batch.py`（185 行），命令行孪生脚本是 `scripts/xlsx_labels.py`。
+
+**读表不引依赖**：`.xlsx` 就是个 zip，`xl/sharedStrings.xml` 存文本、`xl/worksheets/sheetN.xml` 存
+`<c r="B3" t="s"><v>12</v></c>` 这样的单元格。`read_xlsx_rows()` 用 `zipfile` + 正则解析，两种写法都支持
+（`t="s"` 共享字符串、`t="inlineStr"` 内联），数字单元格去掉 `.0` 尾巴。**不支持 `.xls`**（那是 OLE 复合文档）。
+
+**列定位**三种写法等价：`"B"`（Excel 字母）、`2`（1 基序号）、`"员工号"`（表头文字，首行大小写不敏感）。
+
+**居中怎么做的——两种不同机制**：
+
+| 元素 | 机制 | 说明 |
+|---|---|---|
+| 姓名（文本） | `^FB{width},1,0,C,0` | 打印机用真实字体度量居中，CJK/ASCII 混排都准（p.186 的 alignment 参数） |
+| 工号（Code128） | 算术居中：`x = (^PW − 11×(n+2)+13 × m) / 2` | `^BC` 没有对齐参数，只能算；模块数按 Code Set B 计，`m` 是 `^BY` 模块宽 |
+
+工号 5 位、模块宽 3 dots 时：`(11×7+13)×3 = 270` dots，50 mm 标签（400 dots）居中 → `x=65`。
+实测渲染后墨迹中心 199.5 px、图宽 399 px，分毫不差。
+
+**为什么整批一个流**：`send_tcp` 每次都要等打印机回显（≈1 s）。N 张逐张发 = N×1 s 的纯等待；
+拼成一个流（每张一个 `^XA…^XZ`）就只付一次，5 张实测 **1.03 s**。行数多了瓶颈会落到打印机物理速度上。
+
 ---
 
 ## 5. 实机数据：ZR668-200dpi 全链路记录
@@ -330,7 +354,7 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 | 层 | 手段 | 状态 |
 |---|---|---|
-| 单元 | `tests/test_builder.py`：18 组断言——默认值/范围、27 种制式的 Format 位序、QR `^FD` 前缀、`^A@` 中文、`^FH` 转义、`^FB`、图形、编码仲裁、validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报、`^FD` 数据不误报）、validate 单独可用（首次调用自装命令目录） | `ALL TESTS PASSED` |
+| 单元 | `tests/test_builder.py`：27 组断言——默认值/范围、27 种制式的 Format 位序、QR `^FD` 前缀、`^A@` 中文、`^FH` 转义、`^FB`、图形、编码仲裁、validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报、`^FD` 数据不误报）、validate 单独可用（首次调用自装命令目录）、xlsx 读表/列解析/Code128 居中/多标签单流、逐轴坐标不回零 | `ALL TESTS PASSED` |
 | 协议 | stdio 探针（initialize→initialized→tools/list→tools/call 逐条驱动） | 6 工具全通 |
 | 语义/渲染 | Labelary 渲染 PNG → opencv `QRCodeDetector` 解码（本地没有扫枪时的等价验证） | `^FDQA,…` 解出原串；旧写法 `^FDhttps://…` 解出 `ps://…`（少 `htt`） |
 | 实机 | TCP 9100 打印、`~HI/~HS`、web 目录、中文字体对比标签 | 全部通过（ZR668） |
@@ -382,13 +406,15 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 | 文件 | 行数 | 核心内容 |
 |---|---|---|
-| `src/zebra_mcp/server.py` | 291 | FastMCP 入口、6 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
+| `src/zebra_mcp/server.py` | 354 | FastMCP 入口、7 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
 | `src/zebra_mcp/builder.py` | 685 | `build_label`（spec→ZPL）、`validate_zpl`、27 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
 | `src/zebra_mcp/transport.py` | 257 | `_clean_zpl` 编码仲裁、`send_tcp`、`list_windows_printers`、`send_windows_printer`（winspool RAW）、`ascii_preview`、`write_preview` |
 | `src/zebra_mcp/knowledge.py` | 337 | `COMMAND_NOTES`、`BARCODE_NOTES`、`SGD_COMMANDS`、`STATUS_NOTES`、`known_commands()` |
 | `src/zebra_mcp/catalog.py` | 15 | 把 253 命令目录注入 builder 校验器 |
-| `tests/test_builder.py` | 256 | 18 组断言（制式位序、QR 前缀、`^A@`、`^FH`、编码仲裁、预览、知识库覆盖） |
+| `tests/test_builder.py` | 306 | 27 组断言（制式位序、QR 前缀、`^A@`、`^FH`、编码仲裁、预览、知识库覆盖） |
 | `scripts/mcp_probe.py` | 61 | 裸 JSON-RPC stdio 探针（不依赖 MCP SDK，一次一请求） |
+| `src/zebra_mcp/xlsx_batch.py` | 185 | 标准库读 xlsx、列定位、行→spec、Code128 宽度算居中、多标签单流 |
+| `scripts/xlsx_labels.py` | 64 | `print_xlsx` 的命令行孪生（dry-run 默认，`--execute` 才发） |
 | `scripts/extract_manual.py` | 78 | 从 ZPL II 手册 PDF 重建 `data/` 派生文件（不入库，版权原因） |
 | `data/zpl_manual_full.txt` | 44,030 | ZPL II 手册全文（一切默认值的出处） |
 

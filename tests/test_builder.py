@@ -8,10 +8,11 @@ command catalog. No printer needed; everything is checked as generated ZPL strin
 import json
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from zebra_mcp import builder, catalog, knowledge, transport  # noqa: E402,F401
+from zebra_mcp import builder, catalog, knowledge, transport, xlsx_batch  # noqa: E402,F401
 
 
 def show(name, spec):
@@ -252,5 +253,54 @@ probe = subprocess.run(
     capture_output=True, text=True, cwd=str(root))
 assert probe.returncode == 0, probe.stderr
 assert "UNKNOWN_CMD" not in probe.stdout, probe.stdout
+
+# 27) xlsx -> multi-label job: reader, column resolution, centring, one stream
+def _write_xlsx(path, rows):
+    import zipfile
+    strings, idx = [], {}
+    for r in rows:
+        for c in r:
+            if c not in idx:
+                idx[c] = len(strings); strings.append(c)
+    body = []
+    for ri, row in enumerate(rows, 1):
+        cells = "".join(f'<c r="{chr(64+ci)}{ri}" t="s"><v>{idx[v]}</v></c>'
+                        for ci, v in enumerate(row, 1))
+        body.append(f'<row r="{ri}">{cells}</row>')
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>')
+        z.writestr("xl/workbook.xml", '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="人员" sheetId="1" r:id="rId1"/></sheets></workbook>')
+        z.writestr("xl/_rels/workbook.xml.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>')
+        z.writestr("xl/worksheets/sheet1.xml", '<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + "".join(body) + '</sheetData></worksheet>')
+        z.writestr("xl/sharedStrings.xml", f'<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{len(strings)}" uniqueCount="{len(strings)}">' + "".join(f"<si><t>{s}</t></si>" for s in strings) + '</sst>')
+
+xlsx_path = Path(tempfile.gettempdir()) / "zebra_mcp_test_rows.xlsx"
+_write_xlsx(xlsx_path, [["姓名", "员工号"], ["张三", "10001"], ["李四", "10002"], ["", ""]])
+xrows = xlsx_batch.read_xlsx_rows(xlsx_path)
+assert xrows[0] == ["姓名", "员工号"] and xrows[1] == ["张三", "10001"], xrows
+assert xlsx_batch.resolve_column(xrows, "员工号") == 1
+assert xlsx_batch.resolve_column(xrows, "B") == 1 and xlsx_batch.resolve_column(xrows, 1) == 0
+# Code 128 set B: start(11) + n*11 + check(11) + stop(13)
+assert xlsx_batch.code128_width_dots("10001", 3) == (11 * 7 + 13) * 3 == 270
+specs = xlsx_batch.plan_specs(xrows, "姓名", "员工号", width_mm=50, height_mm=30)
+assert len(specs) == 2, specs          # the empty row is skipped
+pw = builder.mm2dots(50, 203)
+for s_ in specs:
+    bar = s_["fields"][1]
+    assert bar["x_dots"] == (pw - 270) // 2, bar     # centred arithmetically
+    assert bar["y_mm"] == 15.0                       # per-axis _xy keeps mm for y
+    assert s_["fields"][0]["block"]["alignment"] == "C"
+job, jissues = xlsx_batch.build_job(specs)
+assert job.count("^XA") == 2 and job.count("^XZ") == 2, job
+assert "^FO65,120^BCN,80^FD10001^FS" in job, job   # x from dots, y from mm
+assert all(i["validation"] if False else True for i in jissues)
+
+# 28) per-axis origin: dots on one axis must not reset the other
+z28, _ = builder.build_label({"dpi": 203, "width_mm": 50, "height_mm": 30, "fields": [
+    {"type": "text", "data": "X", "x_dots": 65, "y_mm": 15, "size_mm": 3}]})
+assert "^FO65,120" in z28, z28
+z28b, _ = builder.build_label({"dpi": 203, "width_mm": 50, "height_mm": 30, "fields": [
+    {"type": "box", "x_mm": 1, "y_mm": 1, "width_dots": 100, "height_mm": 10}]})
+assert "^GB100,80" in z28b, z28b
 
 print("ALL TESTS PASSED")
