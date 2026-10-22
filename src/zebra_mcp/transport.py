@@ -101,7 +101,9 @@ def _find_printer(name_query: str) -> dict | None:
     printers = list_windows_printers()
     q = name_query.lower()
     for p in printers:
-        n = str(p.get("Name", "")).lower()
+        if not p.get("Name"):        # skip the {"error": ...} entry PowerShell failures return
+            continue
+        n = str(p["Name"]).lower()
         if q == n or q in n:
             return p
     return None
@@ -170,7 +172,7 @@ def send_windows_printer(printer_name: str, zpl: str) -> dict:
     """
     printer = _find_printer(printer_name)
     if printer is None:
-        avail = [p.get("Name") for p in list_windows_printers() if isinstance(p, dict)]
+        avail = [p["Name"] for p in list_windows_printers() if p.get("Name")]
         return {"ok": False, "transport": "windows_spool", "printer": printer_name,
                 "error": "printer not found", "available_printers": avail}
     data = _clean_zpl(zpl)
@@ -203,7 +205,7 @@ def send_usb(printer_name: str, zpl: str) -> dict:
     """
     printer = _find_printer(printer_name)
     if printer is None:
-        avail = [p.get("Name") for p in list_windows_printers()]
+        avail = [p["Name"] for p in list_windows_printers() if p.get("Name")]
         return {"ok": False, "transport": "usb", "printer": printer_name,
                 "error": "USB printer queue not found",
                 "available_printers": avail,

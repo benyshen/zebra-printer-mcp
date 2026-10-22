@@ -284,7 +284,7 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 | 层 | 手段 | 状态 |
 |---|---|---|
-| 单元 | `smoke_test2.py`：builder 默认值/范围/条码制式/validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报） | `ALL TESTS PASSED` |
+| 单元 | `tests/test_builder.py`：17 组断言——默认值/范围、27 种制式的 Format 位序、QR `^FD` 前缀、`^A@` 中文、`^FH` 转义、`^FB`、图形、编码仲裁、validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报、`^FD` 数据不误报） | `ALL TESTS PASSED` |
 | 协议 | stdio 探针（initialize→initialized→tools/list→tools/call 逐条驱动） | 6 工具全通 |
 | 实机 | TCP 9100 打印、`~HI/~HS`、web 目录、中文字体对比标签 | 全部通过（ZR668） |
 | 编译 | `py_compile` 全模块 | 通过 |
@@ -294,7 +294,7 @@ uv pip install --python .venv\Scripts\python.exe -e .
 ## 10. 已知边界与路线图
 
 - **老固件**（Fusion 系）：SGD 基本不可用，依赖原生 `~` 命令回退；更老的 Xi4 系部分命令不支持。
-- **Windows USB raw**：Windows 无法绕过驱动直发 raw ZPL；USB 保真路径 = Zebra 官方驱动队列，或换网络口。
+- **Windows USB raw**：走队列的 `RAW` 数据通道（`WritePrinter`），驱动收到 RAW 会原样下传；`job_id`/`bytes_sent` 只能证明**入队成功**，纸张是否真出取决于物理连接，核对仍以 TCP 或肉眼为准。
 - **渲染预览**：ASCII 预览是近似布局（dot→字符格换算 ÷6/÷12），精确预览请用 labelary 或实机。
 - **未做**：ZPL 二进制格式（`^D`/`~DY` 字体下载通道已有知识、未封装成工具）；`~DY` 下载工具值得下一步补上
   （对没有内置 CJK 的机型有用）。
@@ -326,10 +326,10 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 | 文件 | 行数 | 核心内容 |
 |---|---|---|
-| `src/zebra_mcp/server.py` | 287 | FastMCP 入口、6 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
-| `src/zebra_mcp/builder.py` | 666 | `build_label`（spec→ZPL）、`validate_zpl`、27 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
-| `src/zebra_mcp/transport.py` | 255 | `_clean_zpl` 编码仲裁、`send_tcp`、`list_windows_printers`、`send_windows_printer`（winspool RAW）、`ascii_preview`、`write_preview` |
-| `src/zebra_mcp/knowledge.py` | 294 | `COMMAND_NOTES`、`BARCODE_NOTES`、`SGD_COMMANDS`、`STATUS_NOTES`、`known_commands()` |
+| `src/zebra_mcp/server.py` | 288 | FastMCP 入口、6 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
+| `src/zebra_mcp/builder.py` | 679 | `build_label`（spec→ZPL）、`validate_zpl`、27 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
+| `src/zebra_mcp/transport.py` | 257 | `_clean_zpl` 编码仲裁、`send_tcp`、`list_windows_printers`、`send_windows_printer`（winspool RAW）、`ascii_preview`、`write_preview` |
+| `src/zebra_mcp/knowledge.py` | 337 | `COMMAND_NOTES`、`BARCODE_NOTES`、`SGD_COMMANDS`、`STATUS_NOTES`、`known_commands()` |
 | `src/zebra_mcp/catalog.py` | 13 | 把 251 命令目录注入 builder 校验器 |
 | `data/zpl_manual_full.txt` | 44,030 | ZPL II 手册全文（一切默认值的出处） |
 

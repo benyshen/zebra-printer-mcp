@@ -403,9 +403,11 @@ def _render_text(f: dict, dpi: int, issues: list) -> tuple[str, bool]:
     data, used_hex = escape_data(f.get("data", ""), None if no_hex else "_")
     cmd = f"^{origin}{x},{y}"
     if font_file:
-        # ^A@ o,h,w,d:f.x (p.62): name carries over to later ^A@ without a name
-        a = f"^A@{o},{h_dots if h_dots is not None else ''}"
-        a += f",{w_dots if w_dots else ''}"
+        # ^A@ o,h,w,d:f.x (p.62): name carries over to later ^A@ without a name.
+        # Emit the width explicitly (manual examples are ^A@N,50,50,B:CYRI_UB.FNT);
+        # square glyphs are what CJK fonts want, so width defaults to height.
+        w_out = w_dots if w_dots else (h_dots if h_dots is not None else "")
+        a = f"^A@{o},{h_dots if h_dots is not None else ''},{w_out}"
         a += f",{str(font_file).strip().upper()}"
     else:
         a = f"^A{font}{o}"
@@ -437,14 +439,11 @@ def _render_text(f: dict, dpi: int, issues: list) -> tuple[str, bool]:
     return "".join(parts), used_hex
 
 
-def _render_note(f: dict, dpi: int) -> str:
-    x, y, w, h = _xywh(f, dpi)
-    return f"^FO{x},{y}^GB{w},{h},{int(f.get('thickness', 2))},{str(f.get('color', 'B')).upper()},{int(f.get('corner_rounding', 0))}^FS"
-
-
 def _render_box(f: dict, dpi: int) -> str:
+    """^GB graphic box (p.210). 'note' and 'box' are the same ZPL command."""
     x, y, w, h = _xywh(f, dpi)
-    return f"^FO{x},{y}^GB{w},{h},{int(f.get('thickness', 2))},{str(f.get('color', 'B')).upper()},{int(f.get('corner_rounding', 0))}^FS"
+    return (f"^FO{x},{y}^GB{w},{h},{int(f.get('thickness', 2))},"
+            f"{str(f.get('color', 'B')).upper()},{int(f.get('corner_rounding', 0))}^FS")
 
 
 def _render_circle(f: dict, dpi: int) -> str:
@@ -579,7 +578,7 @@ def build_label(spec: dict) -> tuple[str, list]:
         elif t == "barcode":
             chunk, uh = _render_barcode(f, dpi, issues)
         elif t in ("note", "box"):
-            chunk, uh = _render_note(f, dpi), False
+            chunk, uh = _render_box(f, dpi), False
         elif t == "circle":
             chunk, uh = _render_circle(f, dpi), False
         elif t == "reverse":
@@ -644,15 +643,29 @@ def validate_label(spec: dict) -> list:
 
 
 def validate_zpl(zpl: str) -> list:
-    """Light validation of raw ZPL against the manual's command set."""
+    """Light validation of raw ZPL against the manual's command set.
+
+    Field data (^FD…) is blanked before the command scan: a label whose data
+    contains '^' or '~' (escaped with ^FH, or a customer string) must not be
+    reported as "unknown command".
+    """
     issues = []
-    known = set(re.findall(r"[\^~][A-Z0-9@]{1,2}", zpl))
+    scan = re.sub(r"\^FD[^\^]*", "^FD", zpl)
+    known = set(re.findall(r"[\^~][A-Z0-9@]{1,2}", scan))
     # catalog of documented ^/~ commands from the extracted manual
     catalog = KNOWN_COMMANDS
     for tok in known:
         if tok not in catalog:
             issues.append({"severity": "warning", "code": "UNKNOWN_CMD", "field": tok,
                            "message": f"{tok} not found in the ZPL II manual's command catalog"})
+    # ^BQ p.129: field data must open with <error correction><input mode>,
+    for m in re.finditer(r"\^BQ[^\^]*\^FD([^\^]*)", zpl):
+        data = m.group(1)
+        if not re.match(r"^[HQML][AM],", data):
+            issues.append({"severity": "error", "code": "QR_FD_PREFIX", "field": "^BQ",
+                           "message": "QR field data must start with <error correction>"
+                                      "<input mode>, e.g. ^FDQA,<data> (^BQ p.129) — got "
+                                      f"'^FD{data[:12]}'"})
     if zpl.count("^XA") != zpl.count("^XZ"):
         issues.append({"severity": "error", "code": "BRACKETS", "field": "format",
                        "message": "^XA/^XZ unbalanced — every format needs both (^XA p.370 / ^XZ p.375)"})

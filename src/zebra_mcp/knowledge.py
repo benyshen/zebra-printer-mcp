@@ -289,6 +289,34 @@ STATUS_NOTES: dict[str, dict] = {
 }
 
 
+def _barcode_command_notes() -> dict[str, dict]:
+    """One entry per barcode command, derived from builder.BARCODE_SPECS.
+
+    Every symbology generate_zpl can emit therefore also resolves through
+    zpl_knowledge(mode='command', query='^B9'), which previously answered
+    "not found" for ^B0/^B1/^B9/^BA/^BB/^BD/^BE/^BF/^BI/^BJ/^BK/^BM/^BO/^BP/^BR/^BS.
+    """
+    from .builder import BARCODE_SPECS  # local import: builder has no knowledge dep
+    notes: dict[str, dict] = {}
+    for sym, spec in BARCODE_SPECS.items():
+        cmd = spec["cmd"]
+        if cmd in COMMAND_NOTES or cmd in notes:
+            continue
+        page = spec["page"].lstrip("p.")
+        fmt = cmd + ",".join(spec["letters"])
+        notes[cmd] = {
+            "page": int(page),
+            "name": spec["name"],
+            "syntax": fmt,
+            "notes": f"Format line {fmt} (manual p.{page}). Symbology '{sym}' — "
+                     f"see zpl_knowledge(mode='barcodes') for data rules.",
+        }
+    return notes
+
+
+COMMAND_NOTES.update(_barcode_command_notes())
+
+
 def get_command(name: str) -> dict | None:
     return COMMAND_NOTES.get(name)
 

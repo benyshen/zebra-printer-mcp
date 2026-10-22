@@ -153,7 +153,8 @@ z15, i15 = show("cjk font_file", {
     ],
 })
 assert "^CI28" in z15
-assert "^A@N,28" in z15 and "E:SIMSUN.TTF" in z15 and "E:HANS.TTF" in z15
+assert "^A@N,28,28,E:SIMSUN.TTF" in z15, z15   # width defaulted to height
+assert "E:HANS.TTF" in z15
 assert any(i["code"] == "CI_CJK" for i in i15)
 
 # 16) transport encoding: ^CI28 + non-ASCII must go out as UTF-8 bytes, never cp1252 '?'
@@ -217,5 +218,26 @@ assert "条码AI一线" in prev21, prev21
 w = transport.write_preview("^XA^XZ")
 assert Path(w["preview_file"]).name.endswith(".zpl") and w["bytes"] > 0
 assert callable(getattr(transport, "_spool_raw_windows", None))
+
+# 23) validate_zpl must not read ^FD data as commands, and must catch a QR
+# ^FD string without the mandatory <EC><input mode>, prefix
+clean = builder.validate_zpl("^XA^FO10,10^A0N,20^FD100~200 SALE^FS^XZ")
+assert not [i for i in clean if i["code"] == "UNKNOWN_CMD"], clean
+noprefix = builder.validate_zpl("^XA^FO10,10^BQN,2,4^FDhttps://example.com^FS^XZ")
+assert any(i["code"] == "QR_FD_PREFIX" for i in noprefix), noprefix
+withprefix = builder.validate_zpl("^XA^FO10,10^BQN,2,4^FDQA,https://example.com^FS^XZ")
+assert not [i for i in withprefix if i["code"] == "QR_FD_PREFIX"], withprefix
+
+# 24) every supported symbology's command resolves in zpl_knowledge(mode='command')
+for sym, spec in builder.BARCODE_SPECS.items():
+    hit = knowledge.get_command(spec["cmd"])
+    assert hit is not None, (sym, spec["cmd"])
+    assert hit["page"] > 0 and hit["syntax"].startswith(spec["cmd"]), (sym, hit)
+
+# 25) note and box are the same ^GB command
+z25, _ = show("note vs box", {"dpi": 203, "width_mm": 50, "height_mm": 30,
+    "fields": [{"type": "note", "x_mm": 1, "y_mm": 1, "width_mm": 20, "height_mm": 10},
+               {"type": "box", "x_mm": 1, "y_mm": 15, "width_mm": 20, "height_mm": 10}]})
+assert z25.count("^GB") == 2, z25
 
 print("ALL TESTS PASSED")
