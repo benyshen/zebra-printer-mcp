@@ -239,7 +239,7 @@ def printer_status(host: str, port: int = 9100, sgd: str = "", timeout: float = 
             with socket.create_connection((host, port), timeout=timeout) as s:
                 for tag in ("~HI", "~HS"):
                     s.sendall(f"{tag}{CRLF}".encode("ascii"))
-                    _time.sleep(0.4)
+                    _time.sleep(0.15)
                     s.settimeout(timeout)
                     buf = b""
                     while True:
@@ -250,6 +250,9 @@ def printer_status(host: str, port: int = 9100, sgd: str = "", timeout: float = 
                         if not chunk:
                             break
                         buf += chunk
+                        # data arrived -> switch to a short idle window, otherwise
+                        # every status call pays the full socket timeout (~5 s x 2)
+                        s.settimeout(0.5)
                     native[tag] = buf.decode("utf-8", "replace").strip().strip("\x02\x03")
             bits = native.get("~HI", "").split(",")
             if bits and bits[0]:

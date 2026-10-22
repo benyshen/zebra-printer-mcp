@@ -1,6 +1,8 @@
 # Zebra 打印 MCP 服务器 — 技术交流文档
 
 **项目**：`zebra-printer-mcp` — ZPL 标签生成 + Zebra Link-OS 打印机控制的 stdio MCP 服务器
+**配套**：[`MCP-AI调用指南.md`](MCP-AI调用指南.md) —— 面向"该不该用、怎么交给 AI 用"的选型文档（优势 / 使用方法 / 适宜与不适宜场景 / 功能模块）。
+
 **位置**：<https://github.com/benyshen/zebra-printer-mcp>（本地 `E:\workspace\zebra-printer-mcp`） ｜ **版本**：0.1.1 ｜ **环境**：Windows / Python ≥3.10（实测 3.14）
 **知识底座**：ZPL II Programming Guide（`zpl-zbi2-pg-en-202609.pdf`，全文抽取 44,030 行）+ Link-OS 文档（techdocs.zebra.com/link-os）
 **实机验证**：Zebra ZR668-200dpi（局域网 IP，9100 端口，固件 V86.20.21Z）— 网络打印、状态查询、中文打印全部跑通
@@ -239,6 +241,8 @@ PowerShell `Get-Printer` 枚举（Name/PortName/DriverName/PrinterStatus/Shared�
 | TCP 打印 | 多张 Code128+QR+文本标签，`send_tcp` `ok=True, 105 bytes`，零错误回显 |
 | MCP 端到端 | `generate_zpl` → `send_zpl(tcp)` 中文标签 `ok=True, 234 bytes` |
 | 复检后复打 | 中文(`^A@N,28,28`)+QR+`^B9R,63`+边框 → `ok=True, 195 bytes`，零回显，`~HS 0000` |
+| 耗时 | `generate_zpl` ≈0.1 ms、`validate_zpl` ≈0.15 ms、`send_zpl(tcp)` ≈1.0 s、`printer_status` 13.4 s → **3.9 s**（改空闲窗后） | 全部单机实测 |
+| 扫码闭环 | 文档示例标签 8dpmm 渲染 → zxing 解出 Code128 `ABC12345` + QR `https://example.com/p/1` | 静区修正后 |
 | 固件目录 | web 后台 `/dir?dev=E:&otype=.TTF` 列出：`E:SIMSUN.TTF`、`E:HANS.TTF`、`E:TT0003M_.TTF` |
 
 ---
@@ -326,7 +330,7 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 | 层 | 手段 | 状态 |
 |---|---|---|
-| 单元 | `tests/test_builder.py`：17 组断言——默认值/范围、27 种制式的 Format 位序、QR `^FD` 前缀、`^A@` 中文、`^FH` 转义、`^FB`、图形、编码仲裁、validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报、`^FD` 数据不误报） | `ALL TESTS PASSED` |
+| 单元 | `tests/test_builder.py`：18 组断言——默认值/范围、27 种制式的 Format 位序、QR `^FD` 前缀、`^A@` 中文、`^FH` 转义、`^FB`、图形、编码仲裁、validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报、`^FD` 数据不误报）、validate 单独可用（首次调用自装命令目录） | `ALL TESTS PASSED` |
 | 协议 | stdio 探针（initialize→initialized→tools/list→tools/call 逐条驱动） | 6 工具全通 |
 | 语义/渲染 | Labelary 渲染 PNG → opencv `QRCodeDetector` 解码（本地没有扫枪时的等价验证） | `^FDQA,…` 解出原串；旧写法 `^FDhttps://…` 解出 `ps://…`（少 `htt`） |
 | 实机 | TCP 9100 打印、`~HI/~HS`、web 目录、中文字体对比标签 | 全部通过（ZR668） |
@@ -364,7 +368,13 @@ uv pip install --python .venv\Scripts\python.exe -e .
 15. **多行 SGD 响应不能"读到第一个 `\r\n` 就停"**——`! U1 getvar "$~"` 是几百行，早停只拿到第一行；改成短空闲超时（0.6s）读到打印机不再吐字节。
 16. **`^A@` 的宽度位别留空**：`^A@N,28,,E:SIMSUN.TTF` 在某些固件上按 0 处理（字形退化成极窄），显式给 `o,h,w` 才确定；CJK 用方形字形，宽度=高度即可。
 17. **知识库与构建器必须同源**：条码命令的页码/Format 行现在由 `BARCODE_SPECS` 生成 `COMMAND_NOTES`，新增制式只改一处，否则会出现"能发射、`zpl_knowledge` 查不到"。
-18. **`validate_zpl` 通过 ≠ 码能扫**：命令名、配对、参数范围都查不出语义错（QR 前缀就是典型）。静态校验只能抓形式，语义要靠"渲染 + 解码"闭环——本项目的做法是 Labelary 渲染 PNG 后用 opencv `QRCodeDetector` 解一遍，和打印出来的码等价。
+18. **`validate_zpl` 通过 ≠ 码能扫**：命令名、配对、参数范围都查不出语义错（QR 前缀、静区都是典型）。静态校验只能抓形式，语义要靠"渲染 + 解码"闭环——本项目的做法是 Labelary 渲染 PNG 后用 zxing/opencv 解一遍，和打印出来的码等价。
+19. **长超时会惩罚每一次状态查询**：原生 `~HI`/`~HS` 原来用 5 s socket 超时读全，打印机答完也不关连接，
+    于是每次 `printer_status` 白等 2×5 s——实测 **13.4 s**。改成"收到首包后切 0.5 s 空闲窗"，降到 **3.9 s**。
+    凡是"读到连接空闲为止"的读法，首包用长超时、后续用短空闲窗。
+20. **静区（quiet zone）不归语法管**：一维码两侧需 ≥10 倍模块宽的空白。实测 Code128 放在离边框 1 mm 处，
+    ZPL 语法完全正确、渲染出来的条码**格式无误但扫码器读不出**；挪到 6 mm 立刻可读。
+    `^BY` 默认模块宽 2 dots（0.25 mm）已是临界值，零售/物流标签建议给 3。
 
 ---
 
@@ -373,11 +383,11 @@ uv pip install --python .venv\Scripts\python.exe -e .
 | 文件 | 行数 | 核心内容 |
 |---|---|---|
 | `src/zebra_mcp/server.py` | 291 | FastMCP 入口、6 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
-| `src/zebra_mcp/builder.py` | 679 | `build_label`（spec→ZPL）、`validate_zpl`、27 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
+| `src/zebra_mcp/builder.py` | 685 | `build_label`（spec→ZPL）、`validate_zpl`、27 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
 | `src/zebra_mcp/transport.py` | 257 | `_clean_zpl` 编码仲裁、`send_tcp`、`list_windows_printers`、`send_windows_printer`（winspool RAW）、`ascii_preview`、`write_preview` |
 | `src/zebra_mcp/knowledge.py` | 337 | `COMMAND_NOTES`、`BARCODE_NOTES`、`SGD_COMMANDS`、`STATUS_NOTES`、`known_commands()` |
-| `src/zebra_mcp/catalog.py` | 13 | 把 253 命令目录注入 builder 校验器 |
-| `tests/test_builder.py` | 243 | 17 组断言（制式位序、QR 前缀、`^A@`、`^FH`、编码仲裁、预览、知识库覆盖） |
+| `src/zebra_mcp/catalog.py` | 15 | 把 253 命令目录注入 builder 校验器 |
+| `tests/test_builder.py` | 256 | 18 组断言（制式位序、QR 前缀、`^A@`、`^FH`、编码仲裁、预览、知识库覆盖） |
 | `scripts/mcp_probe.py` | 61 | 裸 JSON-RPC stdio 探针（不依赖 MCP SDK，一次一请求） |
 | `scripts/extract_manual.py` | 78 | 从 ZPL II 手册 PDF 重建 `data/` 派生文件（不入库，版权原因） |
 | `data/zpl_manual_full.txt` | 44,030 | ZPL II 手册全文（一切默认值的出处） |

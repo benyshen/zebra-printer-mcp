@@ -240,4 +240,17 @@ z25, _ = show("note vs box", {"dpi": 203, "width_mm": 50, "height_mm": 30,
                {"type": "box", "x_mm": 1, "y_mm": 15, "width_mm": 20, "height_mm": 10}]})
 assert z25.count("^GB") == 2, z25
 
+# 26) validate_zpl must install the manual catalog on first use. A library user
+# that imports only builder (never .catalog) used to get UNKNOWN_CMD for ^XA/^FO.
+import subprocess
+root = Path(__file__).resolve().parents[1]
+probe = subprocess.run(
+    [sys.executable, "-c",
+     "import sys; sys.path.insert(0, 'src');"
+     "from zebra_mcp import builder;"
+     "print([i['code'] for i in builder.validate_zpl('^XA^FO10,10^A0N,20^FDX^FS^XZ')])"],
+    capture_output=True, text=True, cwd=str(root))
+assert probe.returncode == 0, probe.stderr
+assert "UNKNOWN_CMD" not in probe.stdout, probe.stdout
+
 print("ALL TESTS PASSED")

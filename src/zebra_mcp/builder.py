@@ -654,6 +654,12 @@ def validate_zpl(zpl: str) -> list:
     known = set(re.findall(r"[\^~][A-Z0-9@]{1,2}", scan))
     # catalog of documented ^/~ commands from the extracted manual
     catalog = KNOWN_COMMANDS
+    if not catalog:
+        # Library users may call validate_zpl without ever importing .catalog
+        # (the MCP server does it via side effect). Install on first use rather
+        # than reporting every legitimate command as UNKNOWN_CMD.
+        from . import catalog as _catalog
+        catalog = _catalog.install()
     for tok in known:
         if tok not in catalog:
             issues.append({"severity": "warning", "code": "UNKNOWN_CMD", "field": tok,

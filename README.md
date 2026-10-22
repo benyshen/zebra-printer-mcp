@@ -2,7 +2,9 @@
 
 ZPL 标签生成 + Zebra Link-OS 打印机控制的 **stdio MCP 服务器**（Windows 实机跑通，Linux/macOS 除 `windows`/`usb` 传输外通用）。
 
-> **技术交流完整版文档**：[`docs/MCP-技术交流文档.md`](docs/MCP-技术交流文档.md)
+> **技术交流完整版文档**：[`docs/MCP-技术交流文档.md`](docs/MCP-技术交流文档.md)（协议、ZPL 细节、踩坑清单）
+>
+> **AI 调用选型指南**：[`docs/MCP-AI调用指南.md`](docs/MCP-AI调用指南.md)（为什么适合 AI 用、怎么用、**什么场景不该用**）
 > （架构图、6 工具详解、label spec 全键表、ZR668 实机数据、中文打印配方、stdio 探针纪律、11 条踩坑清单）
 
 知识底座：ZPL II Programming Guide（Zebra 官方 PDF，本机全文抽取）+ Link-OS 文档 <https://techdocs.zebra.com/link-os/latest/> 。实机验证：Zebra ZR668-200dpi（固件 V86.20.21Z）— 网络打印、状态查询、中文打印全部跑通。
