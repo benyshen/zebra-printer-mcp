@@ -170,7 +170,7 @@ PowerShell `Get-Printer` 枚举（Name/PortName/DriverName/PrinterStatus/Shared�
 | transport | 通道 | 关键点 |
 |---|---|---|
 | `tcp` | `host:9100` raw | Zebra 标准 raw 口；发送后短暂收 echo（9100 通常不回显，有 echo 即错误文本） |
-| `windows` | PowerShell `Print-File` 假脱机 | 仅当队列驱动是 Zebra ZPL 驱动才保真；否则返回 `zebra_zpl_driver_detected:false` + hint |
+| `windows` | winspool `WritePrinter`（`DOC_INFO_1.pDatatype="RAW"`） | 驱动无关地把原始字节丢进队列；返回 `job_id`、`bytes_sent`、`zebra_zpl_driver_detected` |
 | `usb` | 实为 Windows 队列（USB 打印必过队列） | 找不到队列时返回可用队列列表 |
 | `preview` | 写 `%TEMP%\zebra-mcp\label_preview.zpl` | 可贴 labelary.com 渲染核对 |
 | `dry_run=true` | 只 validate + ASCII 预览 | 不发送 |
@@ -181,7 +181,9 @@ PowerShell `Get-Printer` 枚举（Name/PortName/DriverName/PrinterStatus/Shared�
 
 - 不传 `sgd` → 先 SGD `! U1 getvar "$device.serial_number"`；**失败自动回退原生状态命令**：
   `~HI`（打印机识别：型号/固件/dot 密度/内存）+ `~HS`（状态：接口类别、缺纸/暂停/缓冲/温度各位、
-  标签长度、状态码 `0000 = PRINTER READY`）。回退结果带 `sgd_error` 说明为什么回退。
+  标签长度、状态码 `0000 = PRINTER READY`）。回退结果带 `note` 说明为什么回退。
+  返回体里 `identification` 是 `~HI` 解析结果，`status` 是 `~HS` 第 3 行解析出的状态字
+  （`{code, name, level}`，如 `{"code":"0000","name":"PRINTER READY","level":"ok"}`），`native_status` 保留原始回包。
 - 传 `sgd` → 原样下发 `! U1 …`（getvar/setvar/do），`SGD_COMMANDS` 目录是查询起点。
 
 ---
@@ -313,6 +315,10 @@ uv pip install --python .venv\Scripts\python.exe -e .
 9. **`ctypes` winspool 枚举打印机会段错误**（exit 139）→ PowerShell `Get-Printer`。
 10. **批量 stdin 管道驱动 stdio MCP 会丢响应** → 一次一请求（§3 探针纪律）。
 11. **冒烟测试挑"非法命令"要用真不在目录里的**（`^QQ`）——`^ZZ` 其实是手册里的诊断命令，用它做反例会误判校验器。
+12. **`^BQ` 的 `^FD` 必须以 `<纠错级><输入模式>,` 开头**（p.129 明确写 Mandatory）：`^FDQA,https://…`。漏掉前缀，标签上的二维码扫不出来或干脆空着——这是最隐蔽的错，因为 ZPL 语法校验不会报错。
+13. **参数位序要看各自手册 Format 行，不能套用 `^BCo,h,f,g` 的习惯**：`^B9o,h,f,g,e`、`^B0o,e,h,f,g`、`^BRa,b,c,d,e,f`、`^BQa,b,c,d,e`、`^BFo,h,m`。把 orientation 塞进不存在的 `o` 位（或按别的制式顺序拼 `a,c,b,d,e`），打印出来是校验位/列数乱序，甚至 KeyError 崩在服务端。builder 现在按 `BARCODE_SPECS[..]["letters"]` 逐制式发射。
+14. **`Print-File` 不是通用 cmdlet**（本机 `Get-Command Print-File` 为空，只有 `Out-Printer`，而 `Out-Printer` 发的是文本）。Windows raw 打印只有一条正路：`winspool.drv` 的 `OpenPrinter → StartDocPrinter(RAW) → WritePrinter`。
+15. **多行 SGD 响应不能"读到第一个 `\r\n` 就停"**——`! U1 getvar "$~"` 是几百行，早停只拿到第一行；改成短空闲超时（0.6s）读到打印机不再吐字节。
 
 ---
 
@@ -320,9 +326,9 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 | 文件 | 行数 | 核心内容 |
 |---|---|---|
-| `src/zebra_mcp/server.py` | 271 | FastMCP 入口、6 工具、SGD↔原生状态回退逻辑 |
-| `src/zebra_mcp/builder.py` | 580 | `build_label`（spec→ZPL）、`validate_zpl`、25 制式 `BARCODE_CMDS`/`BARCODE_SPECS`、`^A@` font_file、默认值/范围校验（带页码） |
-| `src/zebra_mcp/transport.py` | 197 | `_clean_zpl` 编码仲裁、`send_tcp`、`list_windows_printers`、`send_windows_printer`、`ascii_preview`、`write_preview` |
+| `src/zebra_mcp/server.py` | 287 | FastMCP 入口、6 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
+| `src/zebra_mcp/builder.py` | 666 | `build_label`（spec→ZPL）、`validate_zpl`、27 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
+| `src/zebra_mcp/transport.py` | 255 | `_clean_zpl` 编码仲裁、`send_tcp`、`list_windows_printers`、`send_windows_printer`（winspool RAW）、`ascii_preview`、`write_preview` |
 | `src/zebra_mcp/knowledge.py` | 294 | `COMMAND_NOTES`、`BARCODE_NOTES`、`SGD_COMMANDS`、`STATUS_NOTES`、`known_commands()` |
 | `src/zebra_mcp/catalog.py` | 13 | 把 251 命令目录注入 builder 校验器 |
 | `data/zpl_manual_full.txt` | 44,030 | ZPL II 手册全文（一切默认值的出处） |

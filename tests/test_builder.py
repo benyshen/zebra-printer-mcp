@@ -161,4 +161,61 @@ from zebra_mcp.transport import _clean_zpl  # noqa: E402
 raw = _clean_zpl("^XA^CI28^FD中文^FS^XZ")
 assert "中文".encode("utf-8") in raw, raw
 
+# 17) Orientation lands in the letter the manual's Format line defines
+# (^B9/^B0 lead with 'o'; ^BR/^BQ/^BO lead with 'a') and never crashes
+z17, i17 = show("orientation letters", {
+    "dpi": 203, "width_mm": 70, "height_mm": 60,
+    "fields": [
+        {"type": "barcode", "symbology": "upca", "data": "012345678905", "orientation": "R", "x_mm": 2, "y_mm": 2},
+        {"type": "barcode", "symbology": "upce", "data": "0123456", "orientation": "R", "x_mm": 2, "y_mm": 12},
+        {"type": "barcode", "symbology": "gs1databar", "data": "0123456789012",
+         "orientation": "N", "height_mm": 10, "x_mm": 2, "y_mm": 24},
+        {"type": "barcode", "symbology": "qrcode", "data": "https://example.com", "scale": 4,
+         "orientation": "N", "x_mm": 40, "y_mm": 30},
+    ],
+})
+assert "^B9R^FD" in z17, z17            # ^B9o,h,f,g,e
+assert "^B0R^FD" in z17, z17            # ^B0o,e,h,f,g
+assert re.search(r"\^BRN,,,,80\^FD", z17), z17   # ^BR a,b,c,d,e,f -> height is 'e'
+assert "^BQN,,4" in z17, z17            # ^BQ a,b,c,d,e -> magnification is 'c'
+assert not [i for i in i17 if i["severity"] == "error"], i17
+
+# 18) QR ^FD must carry the mandatory <EC><input mode>, prefix (^BQ p.129)
+assert "^FDQA,https://example.com" in z17, z17
+z18, _ = show("qr ec H", {
+    "dpi": 203, "width_mm": 40, "height_mm": 40,
+    "fields": [{"type": "barcode", "symbology": "qrcode", "data": "ABC", "scale": 5,
+                "ec_level": "H", "mask": 3, "x_mm": 2, "y_mm": 2}]})
+assert "^BQN,,5,H,3^FDHA,ABC" in z18, z18
+
+# 19) every documented symbology builds without error and emits its command
+for sym, data in [("code11", "12345"), ("codablock", "ABCDEF123456"), ("code49", "ABC123"),
+                  ("micropdf417", "ABC123"), ("planet", "12345678901"),
+                  ("postnet", "123456789"), ("msi", "12345"), ("plessey", "1234ABCD"),
+                  ("logmars", "1234"), ("std2of5", "1234"), ("ean8", "1234567"),
+                  ("upcext", "12345"), ("aztec", "ABC"), ("upsmaxicode", "ABC123")]:
+    zs, iss = builder.build_label({"dpi": 203, "width_mm": 60, "height_mm": 40,
+        "fields": [{"type": "barcode", "symbology": sym, "data": data, "x_mm": 2, "y_mm": 2}]})
+    errs = [i for i in iss if i["severity"] == "error"]
+    assert not errs, (sym, errs)
+    assert builder.BARCODE_SPECS[sym]["cmd"] in zs, (sym, zs)
+
+# 20) MicroPDF417 takes a mode, not PDF417's security/columns/row ratio (^BFo,h,m)
+z20, i20 = show("micropdf417 mode", {"dpi": 203, "width_mm": 60, "height_mm": 40,
+    "fields": [{"type": "barcode", "symbology": "micropdf417", "data": "ABC123", "mode": 5,
+                "height_mm": 8, "x_mm": 2, "y_mm": 2}]})
+assert re.search(r"\^BFN,64,5\^FD", z20), z20
+assert not [i for i in i20 if i["severity"] == "error"], i20
+
+# 21) ASCII preview must show text rendered through ^A@ (TrueType font names
+# contain 'F' in .TTF — the old regex stopped there and dropped the field)
+prev21 = transport.ascii_preview(z15, 70, 30, 200)
+print(prev21)
+assert "条码AI一线" in prev21, prev21
+
+# 22) transport: preview filename is per-process, raw spool helper is exposed
+w = transport.write_preview("^XA^XZ")
+assert Path(w["preview_file"]).name.endswith(".zpl") and w["bytes"] > 0
+assert callable(getattr(transport, "_spool_raw_windows", None))
+
 print("ALL TESTS PASSED")

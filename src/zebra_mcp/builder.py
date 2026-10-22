@@ -33,6 +33,13 @@ MN_MODES = ("N", "Y", "W", "M", "B", "A")  # ^MN p.307
 CJK_FONTS = {"0", "15", "16"}          # ^A p.60 font 15/16 = SC/TC Chinese (model limited)
 
 # symbology -> (zpl command, human name) — manual pages 66-150
+# Symbologies whose manual Format line defines f/g as interpretation lines
+# (below / above the symbol). Everything else uses those letters for other
+# parameters, so they must not be filled with Y/N.
+INTERP_FG = {"code11", "code128", "code39", "code93", "i2of5", "planet", "postnet",
+             "usps", "codabar", "msi", "plessey", "logmars", "std2of5", "ean13",
+             "ean8", "upca", "upce", "upcext"}
+
 BARCODE_CMDS = {
     "code128": ("^BC", "Code 128"), "code39": ("^B3", "Code 39"),
     "code93": ("^BA", "Code 93"), "i2of5": ("^B2", "Interleaved 2 of 5"),
@@ -50,61 +57,67 @@ BARCODE_CMDS = {
     "code11": ("^B1", "Code 11"),
 }
 
-# symbology -> (param letters per manual Format line, defaults keyed by param).
-# Defaults are the manual's stated Default values; None -> omit the parameter.
-# Letters follow the manual Format line exactly (see data/zpl_params_notes.txt).
+# symbology -> manual Format line, parameter letters (in order) and defaults.
+# `letters` follows the manual's Format line exactly (grep "Format: ^B" in
+# data/zpl_manual_full.txt); `orient` names the letter that carries orientation,
+# None for symbologies without one (^BD MaxiCode). Defaults are the manual's
+# stated defaults; None -> omit the parameter and let the printer/^BY decide.
 BARCODE_SPECS = {
-    "code128": dict(cmd="^BC", name="Code 128", page="p.94", letters="ohfge",
-                    d=dict(o="N", h=None, f="Y", g="N", e="N", m="N"),
+    "code11": dict(cmd="^B1", name="Code 11", page="p.72", letters="oehfg",
+                   orient="o", d=dict(o="N", e="N", h=None, f="Y", g="N")),
+    "code128": dict(cmd="^BC", name="Code 128", page="p.94", letters="ohfgem",
+                    orient="o", d=dict(o="N", h=None, f="Y", g="N", e="N", m="N"),
                     extra={"m": ("N", "U", "A")}),
     "code39": dict(cmd="^B3", name="Code 39", page="p.70", letters="oehfg",
-                    d=dict(o="N", e="N", h=None, f="Y", g="N")),
+                   orient="o", d=dict(o="N", e="N", h=None, f="Y", g="N")),
     "code93": dict(cmd="^BA", name="Code 93", page="p.87", letters="ohfge",
-                    d=dict(o="N", h=None, f="Y", g="N", e="N")),
+                   orient="o", d=dict(o="N", h=None, f="Y", g="N", e="N")),
     "i2of5": dict(cmd="^B2", name="Interleaved 2 of 5", page="p.68", letters="ohfgej",
-                    d=dict(o="N", h=None, f="Y", g="N", e="N", j="N")),
+                  orient="o", d=dict(o="N", h=None, f="Y", g="N", e="N", j="N")),
     "planet": dict(cmd="^B5", name="Planet Code", page="p.78", letters="ohfg",
-                    d=dict(o="N", h=None, f="N", g="N")),
+                   orient="o", d=dict(o="N", h=None, f="N", g="N")),
     "postnet": dict(cmd="^BZ", name="POSTNET", page="p.150", letters="ohfgt",
-                    d=dict(o="N", h=None, f="N", g="N", t="0")),
+                    orient="o", d=dict(o="N", h=None, f="N", g="N", t="0")),
     "usps": dict(cmd="^BZ", name="USPS IM Barcode", page="p.150", letters="ohfgt",
-                 d=dict(o="N", h=None, f="N", g="N", t="3")),
+                 orient="o", d=dict(o="N", h=None, f="N", g="N", t="3")),
     "upsmaxicode": dict(cmd="^BD", name="UPS MaxiCode", page="p.106", letters="mnt",
-                    d=dict(o="N", m="2", n="1", t="1"), no_orient=True),
+                        orient=None, d=dict(m="2", n="1", t="1")),
     "pdf417": dict(cmd="^B7", name="PDF417", page="p.79", letters="ohscrt",
-                    d=dict(o="N", h=None, s="0", c="1", r="3", t="N")),
-    "micropdf417": dict(cmd="^BF", name="MicroPDF417", page="p.111", letters="ohscrt",
-                    d=dict(o="N", h=None, s="0", c="1", r="3", t="N")),
+                   orient="o", d=dict(o="N", h=None, s="0", c="1", r="3", t="N")),
+    "micropdf417": dict(cmd="^BF", name="MicroPDF417", page="p.111", letters="ohm",
+                        orient="o", d=dict(o="N", h=None, m="0")),
     "codabar": dict(cmd="^BK", name="Codabar", page="p.118", letters="oehfgkl",
-                    d=dict(o="N", e="N", h=None, f="Y", g="N", k="A", l="A")),
-    "msi": dict(cmd="^BM", name="MSI", page="p.122", letters="oehfge",
-                d=dict(o="N", e="B", h=None, f="Y", g="N")),
+                    orient="o", d=dict(o="N", e="N", h=None, f="Y", g="N", k="A", l="A")),
+    "msi": dict(cmd="^BM", name="MSI", page="p.122", letters="oehfgE",
+                orient="o", d=dict(o="N", e="B", h=None, f="Y", g="N", E="N")),
     "plessey": dict(cmd="^BP", name="Plessey", page="p.126", letters="oehfg",
-                    d=dict(o="N", e="N", h=None, f="Y", g="N")),
+                    orient="o", d=dict(o="N", e="N", h=None, f="Y", g="N")),
     "logmars": dict(cmd="^BI", name="Industrial 2 of 5", page="p.114", letters="ohfg",
-                    d=dict(o="N", h=None, f="Y", g="N")),
+                    orient="o", d=dict(o="N", h=None, f="Y", g="N")),
     "std2of5": dict(cmd="^BJ", name="Standard 2 of 5", page="p.116", letters="ohfg",
-                    d=dict(o="N", h=None, f="Y", g="N")),
+                    orient="o", d=dict(o="N", h=None, f="Y", g="N")),
     "ean13": dict(cmd="^BE", name="EAN-13", page="p.109", letters="ohfg",
-                  d=dict(o="N", h=None, f="Y", g="N")),
+                  orient="o", d=dict(o="N", h=None, f="Y", g="N")),
     "ean8": dict(cmd="^B8", name="EAN-8", page="p.83", letters="ohfg",
-                 d=dict(o="N", h=None, f="Y", g="N")),
-    "upca": dict(cmd="^B9", name="UPC-A", page="p.85", letters="hfg",
-                 d=dict(o="N", h=None, f="Y", g="N")),
-    "upce": dict(cmd="^B0", name="UPC-E", page="p.66", letters="efg",
-                 d=dict(o="N", e="N", f="Y", g="N")),
+                 orient="o", d=dict(o="N", h=None, f="Y", g="N")),
+    "upca": dict(cmd="^B9", name="UPC-A", page="p.85", letters="ohfge",
+                 orient="o", d=dict(o="N", h=None, f="Y", g="N", e="N")),
+    "upce": dict(cmd="^B0", name="UPC-E", page="p.66", letters="oehfg",
+                 orient="o", d=dict(o="N", e="N", h=None, f="Y", g="N")),
     "upcext": dict(cmd="^BS", name="UPC/EAN add-on", page="p.137", letters="ohfg",
-                   d=dict(o="N", h=None, f="Y", g="Y")),
-    "gs1databar": dict(cmd="^BR", name="GS1 Databar", page="p.135", letters="acbde",
-                       d=dict(a="N", b="1", c="2", d="1", e="25")),
-    "code49": dict(cmd="^B4", name="Code 49", page="p.74", letters="ohfg",
-                   d=dict(o="N", h=None, f="Y", g="N")),
-    "datamatrix": dict(cmd="^BX", name="Data Matrix", page="p.144", letters="ohsc",
-                       d=dict(o="N", h=None, s="200", c="0", r="1")),
-    "qrcode": dict(cmd="^BQ", name="QR Code", page="p.128", letters="abcd",
-                   d=dict(a="N", b="2", c="0", d="Q"), no_orient=True),
-    "aztec": dict(cmd="^BO", name="Aztec", page="p.124", letters="abcde",
-                  d=dict(a="N", b="2", c="N", d="0", e="N")),
+                   orient="o", d=dict(o="N", h=None, f="Y", g="Y")),
+    "gs1databar": dict(cmd="^BR", name="GS1 DataBar", page="p.135", letters="abcdef",
+                       orient="a", d=dict(a="R", b="1", c=None, d="1", e="25", f="22")),  # manual: a defaults to R
+    "code49": dict(cmd="^B4", name="Code 49", page="p.74", letters="ohfm",
+                   orient="o", d=dict(o="N", h=None, f="N", m="2")),
+    "codablock": dict(cmd="^BB", name="CODABLOCK", page="p.99", letters="ohscrm",
+                      orient="o", d=dict(o="N", h="8", s="Y", c=None, r=None, m="A")),
+    "datamatrix": dict(cmd="^BX", name="Data Matrix", page="p.144", letters="ohscr",
+                       orient="o", d=dict(o="N", h=None, s="200", c="0", r="1")),
+    "qrcode": dict(cmd="^BQ", name="QR Code", page="p.128", letters="abcde",
+                   orient="a", d=dict(a="N", b="2", c="0", d="Q", e="7")),
+    "aztec": dict(cmd="^BO", name="Aztec", page="p.124", letters="abcdefg",
+                  orient="a", d=dict(a="N", b="2", c="N", d="0", e="N")),
 }
 
 
@@ -147,46 +160,52 @@ def _render_barcode(f: dict, dpi: int, issues: list) -> tuple[str, bool]:
                        "field": sym, "message": f"Unknown symbology '{sym}'. "
                        f"See zpl_knowledge(mode='barcodes') for the supported list."})
         return "", False
-    out = []
     no_hex = bool(f.get("no_hex", False))
-    hex_ind = None if no_hex else "_"
+    d = spec["d"]
     params: dict = {}
 
-    if not spec.get("no_orient"):
-        o = str(f.get("orientation", spec["d"]["o"])).upper()
+    # Orientation: which letter carries it comes from the manual's Format line
+    # (^B9/^BR/^BQ/^BO use 'a' or lead with 'o'; ^BD MaxiCode has none at all).
+    orient_letter = spec.get("orient")
+    if orient_letter:
+        o = str(f.get("orientation", "N")).upper()
         if o not in ORIENTATIONS:
             issues.append({"severity": "warning", "code": "ORIENT", "field": sym,
-                           "message": f"orientation '{o}' invalid, using {spec['d']['o']} (manual: N/R/I/B)"})
-            o = spec["d"]["o"]
-        params["o"] = o
-    else:
-        if f.get("orientation"):
-            issues.append({"severity": "warning", "code": "ORIENT_NA", "field": sym,
-                           "message": f"{spec['name']}: ^FW has no effect on rotation (^BQ p.128)"})
+                           "message": f"orientation '{o}' invalid, using {d.get(orient_letter, 'N')} (manual: N/R/I/B)"})
+            o = d.get(orient_letter, "N")
+        params[orient_letter] = o
+    elif f.get("orientation"):
+        issues.append({"severity": "warning", "code": "ORIENT_NA", "field": sym,
+                       "message": f"{spec['name']}: {spec['cmd']} has no orientation parameter "
+                                  f"(manual Format line {spec['page']})"})
 
-    # barcode height override (else ^BY h used, manual default 10 dots)
-    h = f.get("height_dots", f.get("height_mm"))
-    if h is not None:
-        h = int(h) if "height_dots" in f else mm2dots(f["height_mm"], dpi)
+    # bar height override (else ^BY h is used, manual default 10 dots)
+    if "height_dots" in f or "height_mm" in f:
+        h = int(f["height_dots"]) if "height_dots" in f else mm2dots(f["height_mm"], dpi)
         if not (1 <= h <= BARCODE_H_MAX):
             issues.append({"severity": "error", "code": "BC_HEIGHT", "field": sym,
                            "message": f"barcode height {h} outside 1-{BARCODE_H_MAX} dots"})
         params["h"] = str(h)
 
+    # ---- per-symbology parameters (letters as in the manual Format line) ----
     if sym == "datamatrix":
         if f.get("module_size_dots"):
-            params["h"] = str(int(f["module_size_dots"]))
+            m = int(f["module_size_dots"])
+            if not (1 <= m <= 25):
+                issues.append({"severity": "warning", "code": "DM_MODULE", "field": sym,
+                               "message": f"module size {m} outside 1-25 dots (^BX p.144)"})
+            params["h"] = str(m)
         if f.get("quality") is not None:
             q = str(f["quality"])
             if q not in ("0", "50", "80", "100", "140", "200"):
                 issues.append({"severity": "error", "code": "DM_QUALITY", "field": sym,
                                "message": f"quality '{q}' not in 0/50/80/100/140/200 (^BX p.144)"})
             params["s"] = q
-        if f.get("columns"):
+        if f.get("columns") is not None:
             params["c"] = str(int(f["columns"]))
-        if f.get("rows"):
+        if f.get("rows") is not None:
             params["r"] = str(int(f["rows"]))
-    if sym == "qrcode":
+    elif sym == "qrcode":
         c = f.get("scale")
         if c is not None:
             c = int(c)
@@ -194,53 +213,110 @@ def _render_barcode(f: dict, dpi: int, issues: list) -> tuple[str, bool]:
                 issues.append({"severity": "error", "code": "QR_SCALE", "field": sym,
                                "message": f"QR magnification {c} outside 1-100 (^BQ p.128)"})
             params["c"] = str(c)
-        d = str(f.get("ec_level", "Q")).upper()
-        if d not in ("H", "Q", "M", "L"):
+        ec = str(f.get("ec_level", d["d"])).upper()
+        if ec not in ("H", "Q", "M", "L"):
             issues.append({"severity": "error", "code": "QR_EC", "field": sym,
-                           "message": f"ec_level '{d}' not in H/Q/M/L (^BQ p.128)"})
-        params["d"] = d
-        mval = f.get("model")
-        if mval is not None:
-            if str(mval) not in ("1", "2"):
+                           "message": f"ec_level '{ec}' not in H/Q/M/L (^BQ p.128)"})
+            ec = d["d"]
+        params["d"] = ec
+        if f.get("model") is not None:
+            mval = str(int(f["model"]))
+            if mval not in ("1", "2"):
                 issues.append({"severity": "warning", "code": "QR_MODEL", "field": sym,
                                "message": "QR model must be 1 or 2; using 2"})
-                mval = 2
-            params["b"] = str(mval)
-    if sym in ("pdf417", "micropdf417"):
-        for key, letter in (("security_level", "s"), ("columns", "c"), ("row_ratio", "r")):
-            if f.get(key) is not None:
-                params[letter] = str(int(f[key]))
-
-    # common interpretation flags
-    for key, letter in (("interpret", "f"), ("interpret_above", "g")):
-        if letter in spec["letters"]:
-            params[letter] = _bool(f.get(key), spec["d"].get(letter, "N"))
-    # check-digit style extras per symbology
-    if "e" in spec["letters"] and sym not in ("qrcode", "aztec", "gs1databar"):
-        if sym == "msi":
-            e = str(f.get("check_digit", spec["d"]["e"])).upper()
-            if e not in ("A", "B", "C", "D"):
-                issues.append({"severity": "warning", "code": "MSI_CHECK", "field": sym,
-                               "message": "MSI check mode must be A/B/C/D; using B"})
-                e = "B"
-            params["e"] = e
+                mval = "2"
+            params["b"] = mval
+        if f.get("mask") is not None:
+            mk = int(f["mask"])
+            if not (0 <= mk <= 7):
+                issues.append({"severity": "warning", "code": "QR_MASK", "field": sym,
+                               "message": f"QR mask {mk} outside 0-7 (^BQ p.128); using 7"})
+                mk = 7
+            params["e"] = str(mk)
+    elif sym in ("pdf417", "micropdf417"):
+        if sym == "micropdf417":
+            if f.get("mode") is not None:
+                mv = int(f["mode"])
+                if not (0 <= mv <= 33):
+                    issues.append({"severity": "error", "code": "MPDF_MODE", "field": sym,
+                                   "message": f"MicroPDF417 mode {mv} outside 0-33 (^BF p.111)"})
+                params["m"] = str(mv)
         else:
-            params["e"] = _bool(f.get("check_digit"), spec["d"].get("e", "N"))
+            for key, letter in (("security_level", "s"), ("columns", "c"), ("row_ratio", "r")):
+                if f.get(key) is not None:
+                    params[letter] = str(int(f[key]))
+    elif sym == "gs1databar":
+        if f.get("symbology_type") is not None:
+            params["b"] = str(int(f["symbology_type"]))
+        if f.get("magnification") is not None:
+            params["c"] = str(int(f["magnification"]))
+        if f.get("separator_height") is not None:
+            params["d"] = str(int(f["separator_height"]))
+        if "height_dots" in f or "height_mm" in f:
+            params["e"] = params.pop("h")          # ^BR e = barcode height, not h
+        if f.get("segment_width") is not None:
+            params["f"] = str(int(f["segment_width"]))
+    elif sym == "code49":
+        if f.get("interpret_pos") is not None:
+            fv = str(f["interpret_pos"]).upper()
+            if fv not in ("N", "A", "B"):
+                issues.append({"severity": "warning", "code": "B4_INTERP", "field": sym,
+                               "message": "Code 49 interpretation must be N/A/B (^B4 p.74); using N"})
+                fv = "N"
+            params["f"] = fv
+        if f.get("mode") is not None:
+            params["m"] = str(int(f["mode"]))
+    elif sym == "codablock":
+        if f.get("security") is not None:
+            params["s"] = _bool(f["security"], d["s"])
+        if f.get("columns") is not None:
+            params["c"] = str(int(f["columns"]))
+        if f.get("rows") is not None:
+            params["r"] = str(int(f["rows"]))
+        if f.get("mode") is not None:
+            mv = str(f["mode"]).upper()
+            if mv not in ("A", "E", "F"):
+                issues.append({"severity": "warning", "code": "BB_MODE", "field": sym,
+                               "message": "CODABLOCK mode must be A/E/F (^BB p.99); using A"})
+                mv = "A"
+            params["m"] = mv
+    elif sym == "codabar":
+        if f.get("start_char"):
+            params["k"] = str(f["start_char"]).upper()
+        if f.get("stop_char"):
+            params["l"] = str(f["stop_char"]).upper()
+    elif sym == "upsmaxicode":
+        params.update({"m": str(f.get("mode", d["m"])), "n": str(f.get("symbol_number", d["n"])),
+                       "t": str(f.get("total_symbols", d["t"]))})
+    elif sym == "msi":
+        e = str(f.get("check_digit", d["e"])).upper()
+        if e not in ("A", "B", "C", "D"):
+            issues.append({"severity": "warning", "code": "MSI_CHECK", "field": sym,
+                           "message": "MSI check mode must be A/B/C/D; using B"})
+            e = "B"
+        params["e"] = e
+        params["E"] = _bool(f.get("insert_check_digit"), d.get("E", "N"))
+
+    # interpretation line flags (f = below, g = above). Only symbologies whose
+    # manual Format line really defines f/g as interpretation lines: on ^BO/^BX/^BR
+    # those letters mean other things (symbol count, escape char, segment width).
+    for letter in ("fg" if sym in INTERP_FG else ""):
+        key = "interpret" if letter == "f" else "interpret_above"
+        if params.get(letter) is None:
+            params[letter] = _bool(f.get(key), d.get(letter, "N"))
+
+    # generic check digit (only symbologies where 'e' means check digit)
+    if "e" in spec["letters"] and sym not in ("qrcode", "aztec", "gs1databar", "msi"):
+        params["e"] = _bool(f.get("check_digit"), d.get("e", "N"))
+
+    # Code 128 mode
     if spec["cmd"] == "^BC" and "m" in spec["letters"]:
-        m = str(f.get("mode", spec["d"].get("m", "N"))).upper()
+        m = str(f.get("mode", d.get("m", "N"))).upper()
         if m not in ("N", "U", "A"):
             issues.append({"severity": "warning", "code": "C128_MODE", "field": sym,
                            "message": "Code128 mode must be N/U/A (auto); using N"})
             m = "N"
         params["m"] = m
-    if sym == "codabar":
-        if f.get("start_char"):
-            params["k"] = str(f["start_char"]).upper()
-        if f.get("stop_char"):
-            params["l"] = str(f["stop_char"]).upper()
-    if sym == "upsmaxicode":
-        params.update({"m": str(f.get("mode", "2")), "n": str(f.get("symbol_number", "1")),
-                       "t": str(f.get("total_symbols", "1"))})
 
     # emit in Format-line letter order with commas; defaults omitted at the tail,
     # skipped middle parameters left as empty segments (valid ZPL: ^BCN,,Y)
@@ -248,7 +324,6 @@ def _render_barcode(f: dict, dpi: int, issues: list) -> tuple[str, bool]:
     for letter in params:
         if letter not in letters:
             letters.append(letter)
-    d = spec["d"]
     explicit = {l for l in params if l in letters and str(params[l]) != str(d.get(l))}
     last = max((letters.index(l) for l in explicit), default=-1)
     segs = [params.get(l, "") for l in letters[: last + 1]]
@@ -257,7 +332,18 @@ def _render_barcode(f: dict, dpi: int, issues: list) -> tuple[str, bool]:
     cmd = spec["cmd"]
     if segs:
         cmd += ",".join(segs)
-    data, used_hex = escape_data(f.get("data", ""), None if no_hex else "_")
+
+    raw_data = str(f.get("data", ""))
+    if sym == "qrcode":
+        # ^BQ p.129: the ^FD string MUST open with <error correction><input mode>,
+        # e.g. ^FDQA,<data>  (Q = high reliability, A = auto data input)
+        mode = str(f.get("input_mode", "A")).upper()
+        if mode not in ("A", "M"):
+            issues.append({"severity": "warning", "code": "QR_INPUT", "field": sym,
+                           "message": "QR input mode must be A (automatic) or M (manual); using A"})
+            mode = "A"
+        raw_data = f"{params.get('d', d['d'])}{mode},{raw_data}"
+    data, used_hex = escape_data(raw_data, None if no_hex else "_")
     fh = "^FH" if used_hex else ""
     # honor field coordinates (^FO before the barcode command, p.201); without
     # this, barcode/QR fields fall back to the current print position

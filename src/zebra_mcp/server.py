@@ -13,6 +13,7 @@ and the Link-OS docs at https://techdocs.zebra.com/link-os/latest/):
 from __future__ import annotations
 
 import json
+import re
 import socket
 import sys
 
@@ -34,6 +35,9 @@ mcp = FastMCP(
 
 def _json(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2, default=str)
+
+
+CRLF = chr(13) + chr(10)  # SGD / native status line terminator
 
 
 @mcp.tool()
@@ -63,7 +67,8 @@ def zpl_knowledge(mode: str = "command", query: str = "") -> str:
         return _json({"results": knowledge.search(query or ".", limit=25)})
     if mode == "barcodes":
         return _json({"symbologies": knowledge.BARCODE_NOTES,
-                      "global_defaults": {"^BY": "width 2 dots, ratio 2.0, height 10 dots (manual p.148)"}})
+                      "supported_by_generate_zpl": sorted(builder.BARCODE_SPECS),
+                      "global_defaults": {"^BY": "width 2 dots, ratio 3.0, height 10 dots (manual p.148)"}})
     if mode == "sgd":
         items = {k: v for k, v in knowledge.SGD_COMMANDS.items()
                  if not query or query.lower() in k.lower()}
@@ -108,8 +113,8 @@ def generate_zpl(label_spec: dict) -> str:
     if zpl:
         res["preview_file"] = transport.write_preview(zpl)["preview_file"]
         res["ascii_preview"] = transport.ascii_preview(
-            zpl, float(label_spec.get("width_mm", 100)), float(label_spec.get("height_mm", 50)),
-            int(label_spec.get("dpi", 203)))
+            zpl, float(label_spec.get("width_mm") or 100), float(label_spec.get("height_mm") or 50),
+            int(label_spec.get("dpi") or 203))
     return _json(res)
 
 
@@ -215,18 +220,22 @@ def printer_status(host: str, port: int = 9100, sgd: str = "", timeout: float = 
                     if not chunk:
                         break
                     buf += chunk
-                    if buf.endswith(b"\r\nOK\r\n") or buf.endswith(b"END\r\n") or (b"\r\n" in buf and len(buf) > 4):
+                    if len(buf) >= 65536:
                         break
+                    # an SGD getvar reply may be several lines (getvar "$~" is
+                    # hundreds): keep reading until the printer goes quiet
+                    s.settimeout(0.6)
                 results.append({"sgd": c.strip(), "response": buf.decode("utf-8", "replace").strip()})
         # native ZPL status fallback (~HI / ~HS): older Fusion-era firmware
         # (e.g. ZR668 V86.x, pre-Link-OS) replies "?" to SGD getvar
         native: dict = {}
         ident: dict = {}
+        status: dict | None = None
         try:
             import time as _time
             with socket.create_connection((host, port), timeout=timeout) as s:
                 for tag in ("~HI", "~HS"):
-                    s.sendall(f"{tag}\r\n".encode("ascii"))
+                    s.sendall(f"{tag}{CRLF}".encode("ascii"))
                     _time.sleep(0.4)
                     s.settimeout(timeout)
                     buf = b""
@@ -245,6 +254,15 @@ def printer_status(host: str, port: int = 9100, sgd: str = "", timeout: float = 
                 if len(bits) > 1: ident["firmware"] = bits[1]
                 if len(bits) > 2: ident["dots_per_mm"] = bits[2]
                 if len(bits) > 3: ident["memory"] = bits[3]
+            # ~HS is three STX/ETX-framed lines; the last one opens with the
+            # four-digit status word (0000 = ready, 0002 = head open, ...)
+            for line in reversed(native.get("~HS", "").split(CRLF)):
+                m = re.match(r"^(\d{4})\b", line.strip().strip("\x02\x03, "))
+                if m:
+                    code = m.group(1)
+                    status = {"code": code, **knowledge.STATUS_NOTES.get(
+                        code, {"name": "UNKNOWN STATUS WORD", "level": "warn"})}
+                    break
         except OSError as e:
             native["error"] = f"{type(e).__name__}: {e}"
         sgd_ok = any(r["response"].strip().strip('"') not in ("", "?") for r in results)
@@ -253,9 +271,8 @@ def printer_status(host: str, port: int = 9100, sgd: str = "", timeout: float = 
         if native.get("~HI") and not sgd_ok:
             note = "SGD getvar not supported on this firmware (pre-Link-OS); native ~HI/~HS used instead"
         return _json({"ok": ok, "host": host, "port": port, "results": results,
-                      "identification": ident, "native_status": native, "sgd_supported": sgd_ok,
-                      "note": note,
-                      "status_hint": knowledge.STATUS_NOTES.get("0000") if ok else None})
+                      "identification": ident, "status": status, "native_status": native,
+                      "sgd_supported": sgd_ok, "note": note})
     except OSError as e:
         return _json({"ok": False, "host": host, "port": port,
                       "error": f"{type(e).__name__}: {e}",

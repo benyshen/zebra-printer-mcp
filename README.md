@@ -96,9 +96,10 @@ Linux/macOS 把 `command` 换成 `.venv/bin/python`。
 
 1. 网络打印机：`printer_status host=<IP>` 先探活 → `send_zpl transport_kind=tcp host=<IP>`。
 2. USB/驱动打印机：`list_printers` 找队列名 → `send_zpl transport_kind=windows printer=<队列名>`。
-   注意：Windows 假脱机走驱动，装了 Zebra ZPL 驱动才保真；否则用 tcp raw。
+   走的是一条 raw 通道（winspool `WritePrinter` + `datatype=RAW`），驱动不参与渲染；
+   返回 `job_id` / `bytes_sent` 便于核对。虚拟打印机（PDF/OneNote 之类）会"假成功"，用 tcp 更稳。
 3. SGD 调参：`printer_status sgd=device.ip.address`、`sgd=do:calibration` 等；老 Fusion 固件
-   （如 ZR668 V86）SGD 不可用，工具自动回退 `~HI`/`~HS`。
+   （如 ZR668 V86）SGD 不可用，工具自动回退 `~HI`/`~HS`，返回 `status` 状态字解析结果。
 4. 无打印机时可先用 `transport_kind=preview`（写 `%TEMP%\zebra-mcp\label_preview.zpl`，
    可在 <https://www.labelary.com> 渲染核对）。
 
