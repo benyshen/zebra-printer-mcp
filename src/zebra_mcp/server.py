@@ -10,6 +10,7 @@ and the Link-OS docs at https://techdocs.zebra.com/link-os/latest/):
   send_zpl             send ZPL over TCP 9100 / Windows queue / USB queue / preview file
   printer_status       query a Link-OS printer via SGD (! U1 getvar) over TCP
   print_xlsx           one label per .xlsx row (text column + Code 128 column, centred)
+  zpl_from_image       photo of a label -> ZPL, via the local label-reprint reference chain
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ import sys
 
 from mcp.server.fastmcp import FastMCP
 
-from . import builder, knowledge, transport, xlsx_batch
+from . import builder, knowledge, photo, transport, xlsx_batch
 from . import catalog  # noqa: E402  (installs manual catalog into builder.validate_zpl)
 
 # FastMCP in MCP SDK 1.x takes no version kwarg; serverInfo.version therefore
@@ -344,6 +345,47 @@ def print_xlsx(xlsx_path: str, name_column: str = "A", id_column: str = "B",
         return _json(base)
     base["sent"] = transport.send_tcp(host, job, port)
     return _json(base)
+
+
+@mcp.tool()
+def zpl_from_image(image_path: str, width_mm: float = 60.0, height_mm: float = 40.0,
+                   dpi: int = 203, frame: str = "auto", use_ocr: bool = True,
+                   font_file: str = "E:SIMSUN.TTF", host: str = "", port: int = 9100,
+                   dry_run: bool = True) -> str:
+    """Turn a photo of an existing label into ZPL (and optionally print it).
+
+    Reconstruction, not design: symbols are decoded (zxing-cpp), text is read
+    (PP-OCRv4), and every element is mapped from pixels to dots. Review the
+    element list once — a photo cannot tell fonts, and logos/bitmaps are out of
+    scope (no ~DG/^GF here).
+
+    image_path : .png/.jpg of the label. frame="auto" tries perspective
+                 correction (needs the label on a contrasting background) and
+                 falls back to the whole photo; frame="full" when already cropped.
+    width_mm/height_mm : the physical label size — this is what turns pixels into
+                 dots. A wrong size scales every element; the ASPECT warning
+                 fires when the photo and label agree badly.
+    use_ocr    : false to return symbols only (no text).
+
+    Returns {ok, zpl, elements[], warnings[], issues[], validation, zpl_file, sent?}.
+    A 1D symbol needing under 2 dots per module is widened with a warning: at
+    203dpi thinner bars get misread (Code 128 comes back as Code 39).
+    """
+    try:
+        res = photo.convert(image_path, width_mm=width_mm, height_mm=height_mm,
+                            dpi=dpi, frame=frame, use_ocr=use_ocr, font_file=font_file)
+    except FileNotFoundError:
+        return _json({"error": f"image not found: {image_path}"})
+    except Exception as exc:
+        return _json({"error": f"{type(exc).__name__}: {exc}"})
+    zpl = res["zpl"]
+    res["validation"] = builder.validate_zpl(zpl)
+    res["zpl_file"] = transport.write_preview(zpl, name=f"photo_{os.getpid()}.zpl")["preview_file"]
+    if host and not dry_run:
+        res["sent"] = transport.send_tcp(host, zpl, port)
+    elif host:
+        res["note"] = "dry_run=true, nothing sent; pass dry_run=false to print"
+    return _json(res)
 
 
 def main() -> None:

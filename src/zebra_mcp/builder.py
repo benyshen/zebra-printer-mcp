@@ -163,6 +163,19 @@ def _render_barcode(f: dict, dpi: int, issues: list) -> tuple[str, bool]:
     no_hex = bool(f.get("no_hex", False))
     d = spec["d"]
     params: dict = {}
+    # Per-field ^BY: on a label built from a photo two symbols can need different
+    # module widths, but ^BY is printer state — re-emit it in front of this symbol.
+    by_prefix = ""
+    if any(k in f for k in ("module_width", "module_ratio", "bar_height")):
+        mw = int(f.get("module_width", BY_W))
+        if not (1 <= mw <= 10):
+            issues.append({"severity": "warning", "code": "BY_WIDTH", "field": sym,
+                           "message": f"module width {mw} outside 1-10 (^BY p.148), using {BY_W}"})
+            mw = BY_W
+        ratio = f.get("module_ratio", BY_R)
+        ratio_s = f"{ratio:g}" if isinstance(ratio, float) else str(ratio)
+        bh = int(f.get("bar_height", BY_H))
+        by_prefix = f"^BY{mw},{ratio_s},{bh}"
 
     # Orientation: which letter carries it comes from the manual's Format line
     # (^B9/^BR/^BQ/^BO use 'a' or lead with 'o'; ^BD MaxiCode has none at all).
@@ -351,7 +364,7 @@ def _render_barcode(f: dict, dpi: int, issues: list) -> tuple[str, bool]:
     if any(k in f for k in ("x_mm", "x_dots", "y_mm", "y_dots")):
         x, y = _xy(f, dpi)
         pos = f"^FO{x},{y}"
-    return pos + cmd + fh + "^FD" + data + "^FS", used_hex
+    return pos + by_prefix + cmd + fh + "^FD" + data + "^FS", used_hex
 
 
 def _render_text(f: dict, dpi: int, issues: list) -> tuple[str, bool]:
@@ -370,7 +383,12 @@ def _render_text(f: dict, dpi: int, issues: list) -> tuple[str, bool]:
                        "message": "font must be 0-9 or A-Z (^A p.60)"})
         font = "0"
     h = f.get("size_mm")
-    h_dots = mm2dots(h, dpi) if h is not None else None
+    if h is not None:
+        h_dots = mm2dots(h, dpi)
+    elif f.get("size_dots") is not None:
+        h_dots = int(f["size_dots"])          # pixel/photo-derived sizes come in dots
+    else:
+        h_dots = None
     if h_dots is not None and not (10 <= h_dots <= 32000):
         issues.append({"severity": "error", "code": "TEXT_SIZE", "field": font,
                        "message": f"height {h_dots} dots outside scalable range 10-32000 (^A p.60)"})
@@ -378,6 +396,8 @@ def _render_text(f: dict, dpi: int, issues: list) -> tuple[str, bool]:
     w_dots = None
     if f.get("width_mm"):
         w_dots = mm2dots(f["width_mm"], dpi)
+    elif f.get("width_dots"):
+        w_dots = int(f["width_dots"])
     o = str(f.get("orientation", "N")).upper()
     if o not in ORIENTATIONS:
         issues.append({"severity": "warning", "code": "ORIENT", "field": font,

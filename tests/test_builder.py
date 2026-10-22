@@ -303,4 +303,44 @@ z28b, _ = builder.build_label({"dpi": 203, "width_mm": 50, "height_mm": 30, "fie
     {"type": "box", "x_mm": 1, "y_mm": 1, "width_dots": 100, "height_mm": 10}]})
 assert "^GB100,80" in z28b, z28b
 
+# 29) photo -> ZPL: decode the fixture, check geometry against the labels the
+#     reference implementation produced for the same files, then round-trip the
+#     emitted ZPL back through the validator.
+import os
+here = os.path.dirname(os.path.abspath(__file__))
+fixture = os.path.join(here, "fixtures", "photo_sample.png")
+try:
+    from zebra_mcp import photo, ocr
+    res = photo.convert(fixture, width_mm=60, height_mm=40, frame="full", use_ocr=False)
+    syms = {s["format"]: s for s in res["decoded"]}
+    assert set(syms) == {"Code128", "QRCode"}, syms
+    assert syms["Code128"]["text"] == "ABC123", syms["Code128"]
+    assert syms["QRCode"]["text"] == "NGSU", syms["QRCode"]
+    # perspective-free mapping: px * (label_dots / image_width) == dots
+    bar = [e for e in res["elements"] if e["kind"] == "barcode1d"][0]
+    assert abs(bar["dots"][0] - 30) <= 3 and abs(bar["dots"][2] - 336) <= 4, bar["dots"]
+    assert abs(bar["bar_height"] - 75) <= 4, bar
+    assert "^BY3," in res["zpl"], res["zpl"]          # per-field module width
+    assert builder.validate_zpl(res["zpl"]) == [], res["zpl"]
+    assert res["scale"] > 0 and res["warnings"] is not None
+    if ocr.available():
+        full = photo.convert(fixture, width_mm=60, height_mm=40, frame="full")
+        texts = [e.get("text") for e in full["elements"] if e["kind"] == "text"]
+        assert any("NANJ" in (t or "") for t in texts), texts
+        assert any(w["code"] == "HRI_MERGED" for w in full["warnings"]), full["warnings"]
+    # a second photo at a different resolution: the scale is derived from
+    # width_mm/photo_px, so nothing may be hardcoded to the first fixture
+    res2 = photo.convert(os.path.join(here, "fixtures", "photo_sample2.png"),
+                         width_mm=60, height_mm=40, frame="full", use_ocr=False)
+    assert res2["photo_px"] == [397, 242], res2["photo_px"]
+    dec2 = {s["format"]: s["text"] for s in res2["decoded"]}
+    assert dec2["Code128"] == "ABC123" and dec2["QRCode"] == "RA", dec2
+    bar2 = [e for e in res2["elements"] if e["kind"] == "barcode1d"][0]
+    assert abs(bar2["dots"][0] - 29) <= 3, bar2["dots"]      # px 24 * (480/397)
+    assert builder.validate_zpl(res2["zpl"]) == [], res2["zpl"]
+    missing = photo.convert(os.path.join(here, "fixtures", "nope.png"))
+    assert missing["ok"] is False, missing
+except ImportError:
+    print("  (photo deps absent: pip install 'zebra-printer-mcp[photo]' -- skipped)")
+
 print("ALL TESTS PASSED")

@@ -5,7 +5,7 @@ ZPL 标签生成 + Zebra Link-OS 打印机控制的 **stdio MCP 服务器**（Wi
 > **技术交流完整版文档**：[`docs/MCP-技术交流文档.md`](docs/MCP-技术交流文档.md)（协议、ZPL 细节、踩坑清单）
 >
 > **AI 调用选型指南**：[`docs/MCP-AI调用指南.md`](docs/MCP-AI调用指南.md)（为什么适合 AI 用、怎么用、**什么场景不该用**）
-> （架构图、6 工具详解、label spec 全键表、ZR668 实机数据、中文打印配方、stdio 探针纪律、11 条踩坑清单）
+> （架构图、8 工具详解、label spec 全键表、ZR668 实机数据、中文打印配方、stdio 探针纪律、20 条踩坑清单）
 
 知识底座：ZPL II Programming Guide（Zebra 官方 PDF，本机全文抽取）+ Link-OS 文档 <https://techdocs.zebra.com/link-os/latest/> 。实机验证：Zebra ZR668-200dpi（固件 V86.20.21Z）— 网络打印、状态查询、中文打印全部跑通。
 
@@ -22,12 +22,12 @@ uv venv .venv --python 3.12      # 或 python -m venv .venv
 
 # 自检（不需要打印机）
 .venv/bin/python tests/test_builder.py    # → ALL TESTS PASSED
-.venv/bin/python scripts/mcp_probe.py     # raw JSON-RPC 探针，列出 6 工具
+.venv/bin/python scripts/mcp_probe.py     # raw JSON-RPC 探针，列出 8 工具
 ```
 
 > **必须 `mcp<2`**：2.x 移除了 `mcp.server.fastmcp`，pyproject 已钉 `mcp>=1.9,<2`。
 
-## 7 个 MCP 工具
+## 8 个 MCP 工具
 
 | 工具 | 作用 |
 |---|---|
@@ -38,6 +38,7 @@ uv venv .venv --python 3.12      # 或 python -m venv .venv
 | `send_zpl` | 发送：`tcp`(9100 raw) / `windows`(假脱机) / `usb` / `preview`；`dry_run` 只校验+预览 |
 | `printer_status` | 查询打印机状态：Link-OS SGD 优先，老固件自动回退原生 `~HI`/`~HS` |
 | `print_xlsx` | 读 `.xlsx` 两列（姓名 + 员工号），一行一张标签、文本与 128 码各自居中，整批一个 ZPL 流 |
+| `zpl_from_image` | 一张现有标签的照片 → 解码条码/二维码 + OCR 文字 + 像素换算 dot → ZPL；可 dry_run 或直发 |
 
 ## label spec 示例（generate_zpl 入参）
 
@@ -75,6 +76,40 @@ print_xlsx(xlsx_path="D:/名单.xlsx", name_column="姓名", id_column="员工�
 - 整批拼成**一个 ZPL 流、一次 TCP 连接**：打印机回显只读一次（5 张 ≈1.0 s，不是 5 s）。
 - 只支持 `.xlsx/.xlsm`（标准库解 zip，无 openpyxl 依赖）；`.xls` 请先另存。
 - 命令行孪生：`python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 [--execute --host <IP>]`
+
+## 照片 → ZPL：拍一张现有标签，重建出能打的 ZPL
+
+```text
+zpl_from_image(image_path="D:/标签照片.png", width_mm=60, height_mm=40,
+               frame="auto", dry_run=True)          # dry_run=False + host= 直发
+```
+
+链路全在本仓库里（`photo.py` + `ocr.py`），不依赖外部工程：
+
+1. `frame="auto"`：找标签四边形并做透视校正（Otsu + 轮廓，双极性各试一次）；找不到就退回整图（`frame="full"` 表示照片已经裁好）。
+2. 解码：zxing-cpp 读所有一维码/二维码，拿到 `format` 和原文。
+3. 读字：PP-OCRv4 det+rec（ONNX）；**落在一维码正下方的文字条按位置合并成 HRI**——OCR 会把 `ABC123` 读成 `ABC1Z3`，按字面比对失败就会把这一行打印两遍。
+4. 换算：`dots = px × 标签宽(dot) / 照片宽(px)`；一维码按码制模块数反推模块宽（Code128 = `11×n+13` 个模块），二维码反推放大倍数；文字按 `size ≈ 框高 / 0.775`。
+5. 输出 label spec 交给同一个 `builder`，所以校验、`^BY` 模块宽、中文 `^A@…E:SIMSUN.TTF` 规则全部复用。
+
+实测（样例图 480×320 px，60×40 mm / 203 dpi）：Code128 `^FO30,21`、二维码 `^FO379,24`、文字 `^FO296,231`，与已有参考实现的像素测量**逐值一致**；把生成的 ZPL 送 Labelary 渲染再用 zxing 解码，`ABC123` 与 `NGSU` 原样读回。
+
+安装与模型：
+
+```bash
+.venv\Scripts\pip install -e ".[photo]"    # opencv/zxing-cpp/onnxruntime/pyclipper
+# 模型（15 MB）不入库，二选一：
+#   set ZEBRA_OCR_MODELS=D:\models\paddleocr
+#   或把 ch_PP-OCRv4_det_infer.onnx / ch_PP-OCRv4_rec_infer.onnx / ppocr_keys_v1.txt 放进 data/ocr/
+```
+
+边界（写清楚，别指望它做到）：
+
+- **是重建，不是设计**：只还原位置、码内容、文字尺寸；字体认不出（一律 `^A0`/`E:SIMSUN.TTF`）、线条/logo/图片一律不转（不生成 `~DG`/`^GF`）。
+- 小字 OCR 会错：154 px 宽的 `NANJING` 在 15 px 高时被读成 `NAN-ING`（置信度 0.87）。**打之前看一遍 `elements`**，错一个字就改 `text` 重发。
+- 没有 `width_mm`/`height_mm` 就没有比例尺：给错尺寸等于整体缩放，`ASPECT` 警告只在你给错太离谱时才会响。
+- 照片糊、倾斜 >45°、条码被压扁/反光 → 解码直接空手而归，此时它不会编造条码内容，只会返回 `symbol_count: 0`。
+- 二维码在照片里太小（<21 px 见方）时 zxing 读不出；先把照片拍清楚比调参数有用。
 
 ## 中文打印（ZR668 实机验证）
 

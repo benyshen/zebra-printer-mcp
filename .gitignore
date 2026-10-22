@@ -233,3 +233,6 @@ data/zpl_manual_full.txt
 data/zpl_command_secs.txt
 data/zpl_params_notes.txt
 *.pdf
+
+# PP-OCRv4 weights (15 MB) are not vendored: set ZEBRA_OCR_MODELS instead
+data/ocr/

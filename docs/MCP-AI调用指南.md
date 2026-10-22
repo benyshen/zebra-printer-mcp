@@ -46,7 +46,7 @@ ZPL 是**无校验的文本协议**：语法错了打印机会照样吃，版式
 | 出错时机 | 打出来才发现（要人工扫码/量尺） | 发射前返回 `issues[]`，带 `code`/`field`/手册页码 |
 | 出错方式 | 静默错标签 | 可自纠错的返回（模型读到 `QR_FD_PREFIX` 就知道补前缀） |
 | 复现性 | 每次生成文本不同 | **同一 spec → 同一字节**（可 diff、可进回归） |
-| 上下文成本 | 每次要把手册片段塞进 prompt（几千 token） | `tools/list` 只暴露 6 个 schema |
+| 上下文成本 | 每次要把手册片段塞进 prompt（几千 token） | `tools/list` 只暴露 8 个 schema |
 | 纸张成本 | 打废一张 = 一张纸 + 一次扫码确认 | 先 `validate` + `dry_run`，再落纸 |
 | 换模型 | 换模型 = 重新调 prompt | 换模型 = 不动调用方（工具契约不变） |
 
@@ -55,7 +55,7 @@ ZPL 是**无校验的文本协议**：语法错了打印机会照样吃，版式
 ### 2.3 三条额外的工程收益
 
 1. **手册可溯源**：`zpl_knowledge(mode="command", query="^BR")` 直接给语法、默认值、页码——模型"查"而不是"猜"，答案能被人核对。
-2. **确定性可审计**：同 spec 同字节 → 可以放进 git、可以写断言、可以对比新旧模板差异（本项目 27 组断言就是这么锁的）。
+2. **确定性可审计**：同 spec 同字节 → 可以放进 git、可以写断言、可以对比新旧模板差异（本项目 29 组断言就是这么锁的）。
 3. **无网络暴露面**：stdio 本地子进程，不监听端口、不需要 token、不出网。企业内网里这是最容易过审的形态。
 
 ---
@@ -187,11 +187,39 @@ python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 --dry-run
 python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 --execute --host <打印机IP>
 ```
 
+### 3.6 照片：给一张现有标签的图，反出 ZPL
+
+`zpl_from_image` 是**重建**，不是设计：解码 + OCR + 像素映射，全在本仓库（`photo.py` / `ocr.py`）。
+
+```text
+zpl_from_image(image_path="D:/标签.png", width_mm=60, height_mm=40,
+               frame="auto",          # 标签在画面里带背景 -> auto；已裁好 -> full
+               dry_run=True)          # 先看 elements，确认无误再 dry_run=False + host 直发
+```
+
+返回 `{ok, zpl, elements[], decoded[], warnings[], validation, symbol_count, scale}`。
+
+四步流水线与各自的坑：
+
+| 步 | 做什么 | 什么时候会失手 |
+|---|---|---|
+| 找标签 | Otsu + 轮廓 + 四边形，双极性各试；透视校正 | 背景和标签同色、倾斜 >45° → 退回整图并给 `NO_QUAD` |
+| 解码 | zxing-cpp 读全部一维码/二维码 | 糊、反光、模块 <2 px → 拿不到，`symbol_count: 0`（**不会编造内容**） |
+| 读字 | PP-OCRv4 det+rec | 字高 <12 px 开始出错（154 px 宽的 `NANJING` 读成 `NAN-ING`，置信度 0.87） |
+| 映射 | `dot = px × 标签宽 / 照片宽`；一维码反推模块宽、二维码反推放大倍数、文字 `size ≈ 框高/0.775` | `width_mm/height_mm` 给错 = 整体缩放，`ASPECT` 警告只在差得离谱时响 |
+
+两个已修的真缺陷，值得知道它们为什么必要：
+
+- **HRI 必须按位置合并**：一维码下面那行字，OCR 十有八九错一个字符（`ABC123`→`ABC1Z3`）。按字面比对 → 判为"另一段文字"→ 标签上这行打两遍（一遍 `^BC …,Y`，一遍当文本）。
+- **`^BY` 必须能逐字段发**：一张标签上 128 码和二维码的模块宽不同，`^BY` 是打印机级设置，只在标签开头发一次会把两者绑死。现在字段带 `module_width` 就就地发 `^BY`。
+
+诚实边界：字体认不出（统一 `^A0` / `E:SIMSUN.TTF`）、**线条/logo/图片不转**（不生成 `~DG`/`^GF`）、小字 OCR 会错。所以流程是"生成 → 人看一眼 `elements` → 再打"，不是"拍完直接打"。
+
 ---
 
 ## 4. 能实现的功能模块
 
-### 4.1 七个工具（对外能力面）
+### 4.1 八个工具（对外能力面）
 
 | 工具 | 入参 | 返回 | 实测耗时 | 依赖 |
 |---|---|---|---|---|
@@ -202,18 +230,21 @@ python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 --execute
 | `send_zpl` | `zpl`、`transport_kind`(tcp/windows/usb/preview)、`host`/`printer`/`port`、`dry_run` | 发送结果 + 回显 | ≈1.0 s（tcp） | 网络或队列 |
 | `printer_status` | `host`、`port`、`sgd`、`timeout` | `{identification(~HI), status(~HS 第3行), sgd{}, native_status}` | ≈3.9 s | 网络 |
 | `print_xlsx` | `xlsx_path`、`name_column`/`id_column`（字母/序号/表头名）、尺寸与 `dry_run` | `{labels, rows_read, bytes, issues[], zpl_file, first_label, sent}` | 5 张 ≈1.0 s（单流） | 读 xlsx 用标准库，发送走 TCP |
+| `zpl_from_image` | `image_path`、`width_mm`/`height_mm`（比例尺）、`frame`(auto/label/full)、`use_ocr`、`dry_run`/`host` | `{ok, zpl, elements[], decoded[], warnings[], validation, symbol_count}` | 首次 0.45 s（装模型），之后 ≈0.14 s | cv2 + zxing-cpp + onnxruntime（`[photo]` extra） |
 
 ### 4.2 内部模块（改代码时才关心）
 
 | 模块 | 行数 | 职责 |
 |---|---|---|
-| `builder.py` | 685 | spec→ZPL（含 27 制式 `BARCODE_SPECS`、图形、单位换算、范围校验、`validate_zpl`） |
+| `builder.py` | 713 | spec→ZPL（含 27 制式 `BARCODE_SPECS`、图形、单位换算、范围校验、`validate_zpl`） |
 | `knowledge.py` | 337 | 253 命令目录、69 条命令页、27 制式规则、27 条 SGD、13 个状态码 |
 | `transport.py` | 257 | 编码仲裁（`^CI28`+UTF-8）、TCP、winspool RAW、ASCII 预览 |
-| `server.py` | 354 | 七个工具、SGD↔原生（`~HI`/`~HS`）状态回退 |
+| `server.py` | 396 | 八个工具、SGD↔原生（`~HI`/`~HS`）状态回退 |
 | `catalog.py` | 15 | 把手册目录注入校验器 |
+| `photo.py` | 345 | 照片→spec：找标签/透视校正、解码、几何映射、`^BY` 反推 |
+| `ocr.py` | 242 | PP-OCRv4 det+rec（ONNX），DB 后处理 + CTC 解码 |
 | `xlsx_batch.py` | 185 | 标准库读 xlsx（zip+XML）、列解析、行→spec、Code128 宽度算居中、多标签单流 |
-| `tests/test_builder.py` | 306 | 27 组断言（位序、QR 前缀、`^A@`、编码、预览、知识库覆盖、xlsx 批量与逐轴坐标） |
+| `tests/test_builder.py` | 336 | 29 组断言（位序、QR 前缀、`^A@`、编码、预览、知识库覆盖、xlsx 批量、逐轴坐标、照片→ZPL 几何与回环） |
 
 ### 4.3 覆盖范围（能做的）
 
@@ -236,9 +267,10 @@ python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 --execute
 | **Agent / 聊天里随口出标签** | 模型只需填 spec，不需要 ZPL 知识；`issues[]` 让它自己改对 | "打一张 70×40 的，标题是这批货号，右下角二维码指向这条链接" |
 | **参数化小批量** | 模板固定、只变 `data`，spec 短、输出确定 | 一天几十张 SKU/批次/序列号标签 |
 | **表格批量**（名单/工号/资产编号） | `print_xlsx` 一次读表出整批，单连接单回显 | 给一个 xlsx：一列姓名、一列工号打 128 码，居中 |
+| **老标签数字化**（只有纸质样张，没有源文件） | `zpl_from_image` 解码 + OCR + 几何映射，几十秒出可编辑的 spec/ZPL | 拍一张旧标签 → 出 ZPL → 改文字重打 |
 | **现场调试**（手边没有 BarTender，只有一台网口打印机） | TCP 直发 + 回显 + `printer_status`，不装驱动 | "打印机打不出来，先看状态字" |
 | **中文标签** | 编码与字体配方已封装，实测过 | 中文品名 + 条码 + 二维码一张出 |
-| **标签模板治理** | 同 spec 同字节 → 可 diff、可回归、可 code review | 把标签当代码管，改模板跑 27 组断言 |
+| **标签模板治理** | 同 spec 同字节 → 可 diff、可回归、可 code review | 把标签当代码管，改模板跑 29 组断言 |
 | **教学 / 技术交流** | `zpl_knowledge` 让"手册"变成可问的对象；错误码能把坑讲清楚 | 现场演示"错一位参数会发生什么" |
 | **给业务系统加个 AI 出口**（MES/ERP 助手） | 业务侧只给结构化字段，打印细节不外泄 | 拣货完成 → 自动出箱标 |
 | **多模型混用** | 工具契约稳定，换模型不改调用方 | Claude/DeepSeek/GPT 共用一套 |
@@ -254,6 +286,8 @@ python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 --execute
 | **高速产线连续打印**（>1 张/秒） | `send_zpl(tcp)` 实测 **≈1.0 s/张**（含等打印机回显），串行且无并发调度 | Zebra **PrintConnect** / **SDS**，或自建 socket 长连接流水线（本项目代码可复用 `transport.send_tcp`） |
 | **无人值守常驻服务** | stdio 进程跟着客户端活；无重试、无队列、无失败落盘 | 包成 Windows 服务或 HTTP 网关（见技术文档 §10 路线图），或直接用打印中间件 |
 | **复杂版式 / 照片 / 半色调** | 未实现 `^GF` 位图流，`image` 只能引用打印机里已有的 `.GRF` | **BarTender** / **Zebra Designer** 排版，导出 `.zpl` 再交给 `send_zpl` |
+| **照片转 ZPL 想要"一模一样"**（logo、图标、特殊字体、网点） | 只还原码内容/文字/坐标；图与线不转，字体统一为 `^A0`/`E:SIMSUN.TTF` | 设计器重排；`zpl_from_image` 只当"把老标签的字段抠出来"的起点 |
+| **拍完直接批量打**（一次几百张照片） | 每张都要人看一眼 `elements`：小字 OCR 会错一个字，错字打出去就是废标签 | 人工确认一版 spec 后转成模板，后续走 `generate_zpl`/`print_xlsx` |
 | **RFID 编码**（写 EPC/标签锁定） | `^RF`/`^RW`/`^RU` 未封装 | Zebra **123RFID** / SDK |
 | **非 ZPL 机型**（EPL/CPCL 老机、部分桌面机） | 只发 ZPL II | 对应机型语言，或换机型 |
 | **多打印机集群 / 作业管理** | 无并发调度、无队列监控、无耗材计数 | **Zebra Printer Profile Manager** / SDS / PrintConnect |
@@ -275,6 +309,7 @@ python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 --execute
 | `printer_status` | **≈3.9 s** | 4 条 SGD（本机型回 `?`）+ `~HI`/`~HS` 两条原生；复检时从 13.4 s 优化到 3.9 s |
 | `print_xlsx`（5 张） | **≈1.0 s** | 整批一个流；500 张同样是"1 次连接 + 1 次回显"，瓶颈变成打印速度而非调用次数 |
 | `list_printers` | 0.3–1 s | PowerShell 枚举，进程启动占大头 |
+| `zpl_from_image` | **0.14 s**（热）/ 0.45 s（冷） | 480×320 样张：解码 + 2 行 OCR + 几何映射；冷启是 ONNX 模型加载 |
 
 **吞吐结论**：串行 ≈1 张/秒，且**没有内建并发**。要更快就绕开"等回显"（把回显窗口调小或做长连接），这属于改造而不是配置。
 

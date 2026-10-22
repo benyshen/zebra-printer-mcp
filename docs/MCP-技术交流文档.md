@@ -28,6 +28,7 @@ LLM/Agent 要驱动一台 Zebra 标签打印机， ordinarily 需要：懂 ZPL I
 | `send_zpl` | 发送 ZPL：`tcp`(9100 raw) / `windows`(假脱机) / `usb` / `preview`，或 `dry_run` 只校验 |
 | `printer_status` | 探活 + 状态 + SGD 查询/设置（内置老固件 `~HI/~HS` 回退） |
 | `print_xlsx` | 读 `.xlsx` 两列（文本 + Code128），一行一张标签、各自居中，整批一个 ZPL 流 |
+| `zpl_from_image` | 一张现有标签的照片 → 解码 + OCR + 像素→dot → ZPL（可 dry_run 或直发） |
 
 设计原则：**每一条校验和默认值都有手册页码背书**（builder 的 issue 消息里直接带 `^PW p.329` 这类引用），
 出问题可以回溯到手册原文核对。
@@ -88,7 +89,7 @@ LLM/Agent 要驱动一台 Zebra 标签打印机， ordinarily 需要：懂 ZPL I
   "clientInfo":{"name":"smoke","version":"1.0"}}}
 // ← 收到响应后再发
 {"jsonrpc":"2.0","method":"notifications/initialized"}
-// → tools/list  → 返回 6 个工具的完整 inputSchema
+// → tools/list  → 返回 8 个工具的完整 inputSchema
 // → tools/call
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
   "name":"generate_zpl","arguments":{"label_spec":{"dpi":200,"width_mm":60,"height_mm":40,
@@ -104,7 +105,7 @@ LLM/Agent 要驱动一台 Zebra 标签打印机， ordinarily 需要：懂 ZPL I
 
 ---
 
-## 4. 七个工具详解
+## 4. 八个工具详解
 
 ### 4.1 `generate_zpl(label_spec) -> {zpl, issues[]}`
 
@@ -255,6 +256,41 @@ PowerShell `Get-Printer` 枚举（Name/PortName/DriverName/PrinterStatus/Shared�
 
 ---
 
+### 4.8 `zpl_from_image(image_path, width_mm, height_mm, dpi, frame, use_ocr, dry_run, host) -> {ok, zpl, elements[], decoded[], warnings[], validation, symbol_count}`
+
+一条照片→ZPL 的完整重建流水线，全部在本仓库内（`photo.py` 345 行 + `ocr.py` 242 行），不依赖外部工程。
+
+```
+照片 ──[找标签/透视校正]──> 正视图 ──[zxing-cpp]──> 符号(格式+内容+框)
+                                    └─[PP-OCRv4]──> 文字(内容+置信度+框)
+        ──[px→dot 映射 + 逐元素规则]──> label spec ──[builder]──> ZPL
+```
+
+| 阶段 | 实现 | 关键参数/判据 |
+|---|---|---|
+| 标签定位 | Otsu 二值（正反两极性）→ 外轮廓 → `approxPolyDP` 四边形 → 单应变换 | 面积 ≥ 画面 8% 且 ≤ 92%，长边归一；失败退整图 + `NO_QUAD` |
+| 符号识别 | `zxingcpp.read_barcodes(try_harder=True)` | 返回 `format`/`text`/四边形；一维码另测条高 |
+| 条高测量 | 框内逐行 ink ratio ≥ 0.30 的连续带 | 取包含框中心的最长带，剔掉 HRI 文字行 |
+| 文字识别 | DB det(736 长边, 0.3/0.5/1.5) + CTC rec(48 高, 右边填充) | `unclip` 用 pyclipper 真实偏移——按质心缩放近似会把 `NANJING` 读成 `NAN-ING` |
+| HRI 合并 | 一维码下方 gap ≤ 1.2×条高、水平重叠 ≥30%、相似度 ≥50% | 必须按位置匹配：OCR 读 `ABC123` 得 `ABC1Z3`，按字面比对就会把这行打两遍 |
+| 几何映射 | `dot = px × 标签宽(dot) / 照片宽(px)`，均匀缩放 | 给 `width_mm/height_mm` 才有比例尺；纵横比偏差 >15% 报 `ASPECT` |
+| 模块宽/放大 | 一维码：模块数（Code128 = `11×n+13`）→ `round(框宽/模块数)`，下限 2 dots；二维码：`round(框宽/模块数)` | <2 dots 会加宽并警告：203dpi 下过细的条会被读成 Code39 |
+| 文字尺寸 | `size_dots = 框高 / 0.775`，再按宽度约束 `0.51×size×字符数 ≤ 框宽` 收窄 | 非 ASCII 走 `font_file`（默认 `E:SIMSUN.TTF` → `^A@`） |
+
+返回值里 `elements[]` 是给人复核的（`kind/format/text/dots/module_width/bar_height/hri`），`validation` 是
+`builder.validate_zpl` 的原样结果，`scale` 是本次 px→dot 的比例。
+
+依赖是**可选 extras**：`pip install -e ".[photo]"`（opencv-python-headless / numpy / zxing-cpp /
+onnxruntime / pyclipper）。OCR 权重 15 MB 不入库：`ZEBRA_OCR_MODELS` 指目录，或放 `data/ocr/`
+（`ch_PP-OCRv4_det_infer.onnx`、`ch_PP-OCRv4_rec_infer.onnx`、`ppocr_keys_v1.txt`）。没装/没模型时
+`use_ocr=True` 会给警告并只出符号与图形，不会崩。
+
+实测（样例 480×320 px → 60×40 mm / 203 dpi）：Code128 `^FO30,21 … ^BCN,75`、QR `^FO379,24 ^BQN,,3`、
+文字 `^FO296,231 ^A0N,43`；与既有参考实现（Android 端 Port）的像素测量逐值一致；把结果送 Labelary
+8dpmm 渲染再 zxing 解码，`ABC123` / `NGSU` 原样读回。耗时：冷启 0.45 s（装模型），热 0.14 s。
+
+---
+
 ## 5. 实机数据：ZR668-200dpi 全链路记录
 
 | 项 | 实测值 |
@@ -354,7 +390,7 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 | 层 | 手段 | 状态 |
 |---|---|---|
-| 单元 | `tests/test_builder.py`：27 组断言——默认值/范围、27 种制式的 Format 位序、QR `^FD` 前缀、`^A@` 中文、`^FH` 转义、`^FB`、图形、编码仲裁、validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报、`^FD` 数据不误报）、validate 单独可用（首次调用自装命令目录）、xlsx 读表/列解析/Code128 居中/多标签单流、逐轴坐标不回零 | `ALL TESTS PASSED` |
+| 单元 | `tests/test_builder.py`：29 组断言——默认值/范围、27 种制式的 Format 位序、QR `^FD` 前缀、`^A@` 中文、`^FH` 转义、`^FB`、图形、编码仲裁、validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报、`^FD` 数据不误报）、validate 单独可用（首次调用自装命令目录）、xlsx 读表/列解析/Code128 居中/多标签单流、逐轴坐标不回零、照片→ZPL（解码内容/几何 ±4 dot/`^BY` 逐字段/校验器回环） | `ALL TESTS PASSED` |
 | 协议 | stdio 探针（initialize→initialized→tools/list→tools/call 逐条驱动） | 6 工具全通 |
 | 语义/渲染 | Labelary 渲染 PNG → opencv `QRCodeDetector` 解码（本地没有扫枪时的等价验证） | `^FDQA,…` 解出原串；旧写法 `^FDhttps://…` 解出 `ps://…`（少 `htt`） |
 | 实机 | TCP 9100 打印、`~HI/~HS`、web 目录、中文字体对比标签 | 全部通过（ZR668） |
@@ -399,6 +435,17 @@ uv pip install --python .venv\Scripts\python.exe -e .
 20. **静区（quiet zone）不归语法管**：一维码两侧需 ≥10 倍模块宽的空白。实测 Code128 放在离边框 1 mm 处，
     ZPL 语法完全正确、渲染出来的条码**格式无误但扫码器读不出**；挪到 6 mm 立刻可读。
     `^BY` 默认模块宽 2 dots（0.25 mm）已是临界值，零售/物流标签建议给 3。
+21. **OCR 会把 HRI 读错一个字，而这条错误会长成两张标签**：一维码下面那行 `ABC123`，OCR 给出 `ABC1Z3`
+    （置信度 0.89 还挺高）。如果拿它跟解码结果做字面比对，判"不相等"就成了另一段文字，最后标签上这行
+    打两遍——一遍来自 `^BC …,Y`，一遍来自文本字段。必须按**位置**判：正下方、gap ≤1.2×条高、
+    水平重叠 ≥30%，再用 50% 相似度兜底。
+22. **`^BY` 是打印机级状态，不是字段属性**：一张标签上 128 码要模块宽 3、二维码要 magnification 3，
+    只在标签开头发一次 `^BY` 会把两者绑死（条码变窄或 QR 溢出）。逐字段发包前 `^BY` 才是对的——
+    顺带也是照片重建的唯一可行解，因为每个符号的物理宽度都不一样。
+23. **ONNX rec 模型的输入宽度不是随便给的**：`48×W` 里 W 由 `ceil(48×宽高比/8)` 得来，超宽文本行
+    会让模型内部形状对不上（`Non-zero status code returned while running Add`）。做法是逐裁剪按比例
+    计算并夹在 `[32, 320]`，失败再退一次 320 宽的标准画布。另一个更隐蔽的同源坑：`load()` 返回
+    `(det, rec)`，两行写反了会拿检测模型跑识别——报错信息完全指向 ONNX，不指向自己。
 
 ---
 
@@ -406,12 +453,15 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 | 文件 | 行数 | 核心内容 |
 |---|---|---|
-| `src/zebra_mcp/server.py` | 354 | FastMCP 入口、7 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
-| `src/zebra_mcp/builder.py` | 685 | `build_label`（spec→ZPL）、`validate_zpl`、27 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
+| `src/zebra_mcp/server.py` | 396 | FastMCP 入口、8 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
+| `src/zebra_mcp/builder.py` | 713 | `build_label`（spec→ZPL）、`validate_zpl`、27 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
 | `src/zebra_mcp/transport.py` | 257 | `_clean_zpl` 编码仲裁、`send_tcp`、`list_windows_printers`、`send_windows_printer`（winspool RAW）、`ascii_preview`、`write_preview` |
 | `src/zebra_mcp/knowledge.py` | 337 | `COMMAND_NOTES`、`BARCODE_NOTES`、`SGD_COMMANDS`、`STATUS_NOTES`、`known_commands()` |
 | `src/zebra_mcp/catalog.py` | 15 | 把 253 命令目录注入 builder 校验器 |
-| `tests/test_builder.py` | 306 | 27 组断言（制式位序、QR 前缀、`^A@`、`^FH`、编码仲裁、预览、知识库覆盖） |
+| `src/zebra_mcp/photo.py` | 345 | 照片→spec：标签定位/透视校正、zxing 解码、条高测量、HRI 按位置合并、px→dot 映射 |
+| `src/zebra_mcp/ocr.py` | 242 | PP-OCRv4 det+rec（ONNX）：DB 后处理（阈值 0.3 / unclip 1.5）、CTC 解码、宽度夹取 |
+| `tests/test_builder.py` | 336 | 29 组断言（制式位序、QR 前缀、`^A@`、`^FH`、编码仲裁、预览、知识库覆盖、xlsx 批量、照片→ZPL 几何与回环） |
+| `tests/fixtures/photo_sample.png` | — | 照片→ZPL 回归样张（480×320，Code128 `ABC123` + QR `NGSU` + `NANJING`） |
 | `scripts/mcp_probe.py` | 61 | 裸 JSON-RPC stdio 探针（不依赖 MCP SDK，一次一请求） |
 | `src/zebra_mcp/xlsx_batch.py` | 185 | 标准库读 xlsx、列定位、行→spec、Code128 宽度算居中、多标签单流 |
 | `scripts/xlsx_labels.py` | 64 | `print_xlsx` 的命令行孪生（dry-run 默认，`--execute` 才发） |
