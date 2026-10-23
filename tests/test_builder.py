@@ -412,4 +412,68 @@ try:
 except ImportError:
     print("  (vision needs numpy/cv2: pip install -e '.[photo]' -- skipped)")
 
+# 31) render_zpl -- offline layout preview. Geometry is locked to Zebra's own
+#     rendering of the same ZPL (Labelary, 8 dpmm): barcode x30..332, QR x379..441,
+#     and ^A0N,43 printing 153x33 dots of ink. If those numbers drift, the preview
+#     starts lying about overflow and the tool is worse than useless.
+try:
+    import tempfile as _tf
+
+    import numpy as _np
+    from PIL import Image as _Image
+
+    from zebra_mcp import render as _render
+
+    _out = _tf.mkdtemp(prefix="zpl_render_")
+    zpl31, i31 = show("render", {"dpi": 203, "width_mm": 60, "height_mm": 40, "fields": [
+        {"type": "text", "data": "NANJING", "x_mm": 40, "y_mm": 29, "size_mm": 5.4},
+        {"type": "barcode", "symbology": "code128", "data": "ABC123", "x_mm": 3.8,
+         "y_mm": 2.6, "height_mm": 9.4, "module_width": 3},
+        {"type": "barcode", "symbology": "qrcode", "data": "NGSU", "x_mm": 47, "y_mm": 3, "scale": 3}]})
+    r31 = _render.render(zpl31, out=f"{_out}/a.png", scale=1)
+    assert r31["ok"] and r31["dots"] == [480, 320], r31
+    assert {"text", "code128", "qrcode"} <= {d["type"] for d in r31["drawn"]}, r31["drawn"]
+    assert not r31["warnings"], r31["warnings"]
+
+    _img = _np.array(_Image.open(r31["png"]).convert("L")) < 128
+
+    def _groups(band, gap=20):
+        cols = _np.where(band.any(axis=0))[0]
+        runs, start, prev = [], cols[0], cols[0]
+        for c in cols[1:]:
+            if c - prev > gap:
+                runs.append((start, prev))
+                start = c
+            prev = c
+        runs.append((start, prev))
+        return runs
+
+    _top = _groups(_img[:130, :])
+    assert _top[0] == (30, 332), _top            # barcode: ^FO30 + 101 modules x 3 dots
+    assert _top[1][0] == 379 and _top[1][1] - _top[1][0] + 1 == 63, _top[1]   # QR 21x3
+
+    _rows = _np.where(_img[200:320, :].any(axis=1))[0]
+    _txt = _groups(_img[200:320, :])[0]
+    assert 150 <= _txt[1] - _txt[0] + 1 <= 158, _txt      # ^A0N,43 ink width
+    assert 31 <= _rows.max() - _rows.min() + 1 <= 36, _rows   # ...and ink height
+
+    # a symbol with no offline encoder must say so instead of drawing a lie
+    zpl31b, _ = show("render dm", {"dpi": 203, "width_mm": 40, "height_mm": 30, "fields": [
+        {"type": "barcode", "symbology": "datamatrix", "data": "HELLO", "x_mm": 5, "y_mm": 5}]})
+    r31b = _render.render(zpl31b, out=f"{_out}/b.png")
+    assert any("datamatrix" in s for s in r31b["approximated"]), r31b["approximated"]
+
+    # text overflowing its ^FB block is exactly what the preview exists to catch
+    r31c = _render.render("^XA^PW300^LL100^FO10,10^A0N,30^FB60,1,0,L^FDWAY TOO WIDE FOR THE BLOCK^FS^XZ",
+                          out=f"{_out}/c.png")
+    assert any("wider than its" in w for w in r31c["warnings"]), r31c["warnings"]
+
+    # the MCP tool wraps the same renderer; scale must not change reported dots
+    from zebra_mcp import server as _server
+    _tool = json.loads(_server.render_zpl(zpl31, out_path=f"{_out}/d.png", scale=2))
+    assert _tool["ok"] and _tool["dots"] == [480, 320] and _tool["scale"] == 2, _tool
+    assert _Image.open(_tool["png"]).size == (960, 640), _tool["png"]
+except ImportError as exc:
+    print(f"  (render needs pillow/segno/python-barcode: pip install -e '.[render]' -- skipped: {exc})")
+
 print("ALL TESTS PASSED")

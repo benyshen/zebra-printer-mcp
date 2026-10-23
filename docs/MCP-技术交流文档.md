@@ -89,7 +89,7 @@ LLM/Agent 要驱动一台 Zebra 标签打印机， ordinarily 需要：懂 ZPL I
   "clientInfo":{"name":"smoke","version":"1.0"}}}
 // ← 收到响应后再发
 {"jsonrpc":"2.0","method":"notifications/initialized"}
-// → tools/list  → 返回 8 个工具的完整 inputSchema
+// → tools/list  → 返回 9 个工具的完整 inputSchema
 // → tools/call
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
   "name":"generate_zpl","arguments":{"label_spec":{"dpi":200,"width_mm":60,"height_mm":40,
@@ -105,7 +105,7 @@ LLM/Agent 要驱动一台 Zebra 标签打印机， ordinarily 需要：懂 ZPL I
 
 ---
 
-## 4. 八个工具详解
+## 4. 九个工具详解
 
 ### 4.1 `generate_zpl(label_spec) -> {zpl, issues[]}`
 
@@ -304,6 +304,27 @@ onnxruntime / pyclipper）。OCR 权重 15 MB 不入库：`ZEBRA_OCR_MODELS` 指
 
 ---
 
+### 4.9 `render_zpl(zpl, out_path="", scale=1) -> {ok, png, dots[], drawn[], approximated[], ignored[], warnings[]}`
+
+离线渲染，把"版式对不对"变成可判断的像素。**没有调用任何云服务**——Labelary 只在开发期当标尺用，运行时零网络依赖。
+
+实现是单遍状态机（`render.py`，约 330 行）：
+
+1. 按 `([\^~])([A-Z@][A-Z0-9]?)` 切 token，参数串跟着命令走；`^FD` 的数据就是到下一个 `^` 为止的原文，所以数据里的 `^`/`~` 不会撕碎语法；
+2. 维护标签级状态：`^FO/^FT` 光标、`^BY`（模块宽/比例/条高）、当前字体高宽、`^FB`（块宽/行数/行距/对齐）；
+3. 反向表 `_CMDS = {spec["cmd"].lstrip("^"): key}` 把 `^BC`/`^BQ` 映射回 `BARCODE_SPECS`，参数位序直接复用 builder 的定义——**一份规格，两处使用**，不会出现"生成用一套位序、渲染用另一套"；
+4. 每个 `^FD` 按当前 pending 元素落笔：文本走 Pillow（横向压缩到 `^A0` 宽度），一维码走 python-barcode 的模块串逐 run 画矩形，QR 走 segno 的矩阵逐模块画格。
+
+三个校准常数不是拍脑袋，是对着 Zebra 自己的渲染逐像素量的（同一段 ZPL，8 dpmm，60×40 mm）：
+
+| 量 | Zebra | 本渲染器 | 处理 |
+|---|---|---|---|
+| `^A0N,43` 的 `NANJING` | 153×34 dots | 156×33 | 字号取 `h`、墨迹高即帽高；横向不再压 |
+| Code128 101 模块 × `^BY3` | x 30…332 | x 30…332 | 逐 run 画矩形，无取整误差 |
+| `^BQN,,3` 的 21 模块二维码 | x 379…441 | x 379…441 | 原点偏移 1×3 模块（实测，非 4 模块静区） |
+
+**故意不做的事**：不仿真打印机字体字形、不模拟静区对扫描的影响、不实现对没有离线编码器的制式（`approximated[]` 里点名）。渲染器一旦开始"猜得像"，就会给出比实际更好看的假象——那比不渲染更危险。
+
 ## 5. 实机数据：ZR668-200dpi 全链路记录
 
 | 项 | 实测值 |
@@ -403,7 +424,7 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 | 层 | 手段 | 状态 |
 |---|---|---|
-| 单元 | `tests/test_builder.py`：29 组断言——默认值/范围、27 种制式的 Format 位序、QR `^FD` 前缀、`^A@` 中文、`^FH` 转义、`^FB`、图形、编码仲裁、validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报、`^FD` 数据不误报）、validate 单独可用（首次调用自装命令目录）、xlsx 读表/列解析/Code128 居中/多标签单流、逐轴坐标不回零、照片→ZPL（解码内容/几何 ±4 dot/`^BY` 逐字段/校验器回环） | `ALL TESTS PASSED` |
+| 单元 | `tests/test_builder.py`：31 组断言——默认值/范围、27 种制式的 Format 位序、QR `^FD` 前缀、`^A@` 中文、`^FH` 转义、`^FB`、图形、编码仲裁、validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报、`^FD` 数据不误报）、validate 单独可用（首次调用自装命令目录）、xlsx 读表/列解析/Code128 居中/多标签单流、逐轴坐标不回零、照片→ZPL（解码内容/几何 ±4 dot/`^BY` 逐字段/校验器回环）、离线渲染几何（条码 x30…332、QR x379…441、`^A0N,43` 墨迹 153±4×33±2 全与 Zebra 逐值一致） | `ALL TESTS PASSED` |
 | 协议 | stdio 探针（initialize→initialized→tools/list→tools/call 逐条驱动） | 6 工具全通 |
 | 语义/渲染 | Labelary 渲染 PNG → opencv `QRCodeDetector` 解码（本地没有扫枪时的等价验证） | `^FDQA,…` 解出原串；旧写法 `^FDhttps://…` 解出 `ps://…`（少 `htt`） |
 | 实机 | TCP 9100 打印、`~HI/~HS`、web 目录、中文字体对比标签 | 全部通过（ZR668） |
@@ -415,10 +436,10 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 - **老固件**（Fusion 系）：SGD 基本不可用，依赖原生 `~` 命令回退；更老的 Xi4 系部分命令不支持。
 - **Windows USB raw**：走队列的 `RAW` 数据通道（`WritePrinter`），驱动收到 RAW 会原样下传；`job_id`/`bytes_sent` 只能证明**入队成功**，纸张是否真出取决于物理连接，核对仍以 TCP 或肉眼为准。
-- **渲染预览**：ASCII 预览是近似布局（dot→字符格换算 ÷6/÷12），精确预览请用 labelary 或实机。
+- **渲染预览**：`render_zpl` 覆盖本工具生成的元素子集（文本/主流一维码/QR/几何图元，见 §4.9），像素级校准到 Zebra `^A0` ±2%；DataMatrix/PDF417/Aztec/MaxiCode 等无离线编码器的制式只画占位框。ASCII 预览仍是"没装 pillow 时的兜底"（dot→字符格 ÷6/÷12）。
 - **未做**：ZPL 二进制格式（`^D`/`~DY` 字体下载通道已有知识、未封装成工具）；`~DY` 下载工具值得下一步补上
   （对没有内置 CJK 的机型有用）。
-- **扩展方向**：`^DF` 格式调用、`^HC` 目录读取、labelary 渲染回传、SGD 变量全量 dump 解析。
+- **扩展方向**：`^DF` 格式调用、`^HC` 目录读取、DataMatrix/PDF417 的离线编码（渲染与生成都要）、SGD 变量全量 dump 解析。
 
 ---
 
@@ -462,11 +483,17 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 ---
 
+24. **`segno` 会悄悄生成 Micro QR**：`NGSU` 这种短数据默认给 17 模块的 Micro QR，而 Zebra `^BQ` 只认标准 QR。渲染出来比真机小一圈，且真机根本不认。必须 `segno.make(..., micro=False)`，回归断言锁"QR 宽度 = 21 × 模块宽"。
+
+25. **ZPL 字体高度不是 PIL 的字号**：`^A0N,43` 在真机上帽高 33 dots，直接 `ImageFont.truetype(size=43)` 画出来是 43。差 30% 意味着预览会把"刚好放得下"的字画成"放不下"。正确做法是量 ink bbox 校准（本仓库取"字号 = h、墨迹即帽高"），并用同一段 ZPL 与 Labelary 逐值对照锁死。
+
+26. **`BARCODE_CMDS` 的值是元组，不是命令字符串**：它是 `symbology -> (cmd, 人类可读名)`，`spec["cmd"]` 还带 `^` 前缀，而分词得到的 token 不带。渲染器最初用 `.values()` 判成员、用带 `^` 的键查表，结果**所有条码静默变成"未知命令"跳过**——页面上只剩文字，看起来像"这条码没画"。修法是反查表 `{spec["cmd"].lstrip("^"): key}`。
+
 ## 12. 源码导览
 
 | 文件 | 行数 | 核心内容 |
 |---|---|---|
-| `src/zebra_mcp/server.py` | 407 | FastMCP 入口、8 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
+| `src/zebra_mcp/server.py` | 437 | FastMCP 入口、9 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
 | `src/zebra_mcp/builder.py` | 713 | `build_label`（spec→ZPL）、`validate_zpl`、27 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
 | `src/zebra_mcp/transport.py` | 257 | `_clean_zpl` 编码仲裁、`send_tcp`、`list_windows_printers`、`send_windows_printer`（winspool RAW）、`ascii_preview`、`write_preview` |
 | `src/zebra_mcp/knowledge.py` | 337 | `COMMAND_NOTES`、`BARCODE_NOTES`、`SGD_COMMANDS`、`STATUS_NOTES`、`known_commands()` |
@@ -474,7 +501,8 @@ uv pip install --python .venv\Scripts\python.exe -e .
 | `src/zebra_mcp/photo.py` | 400 | 照片→spec：标签定位/透视校正、zxing 解码、条高测量、HRI 按位置合并、px→dot 映射 |
 | `src/zebra_mcp/vision.py` | 179 | 可选视觉 LLM 通道：OpenAI 兼容请求、归一化框解析、key 不回显、错误分类 |
 | `src/zebra_mcp/ocr.py` | 242 | PP-OCRv4 det+rec（ONNX）：DB 后处理（阈值 0.3 / unclip 1.5）、CTC 解码、宽度夹取 |
-| `tests/test_builder.py` | 408 | 30 组断言（制式位序、QR 前缀、`^A@`、`^FH`、编码仲裁、预览、知识库覆盖、xlsx 批量、照片→ZPL 几何与回环） |
+| `tests/test_builder.py` | 479 | 31 组断言（制式位序、QR 前缀、`^A@`、`^FH`、编码仲裁、预览、知识库覆盖、xlsx 批量、照片→ZPL 几何与回环、渲染几何对照） |
+| `src/zebra_mcp/render.py` | 350 | 离线 ZPL→PNG 渲染（状态机、`^A0` 校准、1D/QR 绘制、未支持制式点名） |
 | `tests/fixtures/photo_sample.png` | — | 照片→ZPL 回归样张（480×320，Code128 `ABC123` + QR `NGSU` + `NANJING`） |
 | `scripts/mcp_probe.py` | 61 | 裸 JSON-RPC stdio 探针（不依赖 MCP SDK，一次一请求） |
 | `src/zebra_mcp/xlsx_batch.py` | 185 | 标准库读 xlsx、列定位、行→spec、Code128 宽度算居中、多标签单流 |

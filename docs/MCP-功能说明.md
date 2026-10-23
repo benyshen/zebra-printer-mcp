@@ -1,6 +1,6 @@
 # Zebra 打印 MCP · 详细功能说明
 
-> 版本 0.2.0 ｜ stdio MCP server ｜ 8 个工具 ｜ 253 条命令 ｜ 27 种条码制式 ｜ 30 组回归断言
+> 版本 0.3.0 ｜ stdio MCP server ｜ 9 个工具 ｜ 253 条命令 ｜ 27 种条码制式 ｜ 31 组回归断言
 > 所有数字与默认值均从代码与 ZPL II 编程手册（zpl-zbi2-pg-en-202609）取，不是估计值。
 
 一句话：**模型只填结构化字段，ZPL 的语法、默认值、参数位序、单位换算、编码由服务端保证。**
@@ -20,7 +20,7 @@
 
 ---
 
-## 2. 八个工具：输入 → 输出
+## 2. 九个工具：输入 → 输出
 
 ### 2.1 `generate_zpl(label_spec: dict)`
 
@@ -111,6 +111,37 @@
 - 单模块不足 2 点会被加宽并警告（203 dpi 下过细的条会被读成 Code 39）
 
 ---
+
+### 2.9 `render_zpl(zpl: str, out_path: str = "", scale: int = 1)`
+
+把 ZPL 渲染成 PNG，让 agent 在花纸之前先看一眼。**纯本地**，不走 Labelary、不碰打印机，需 `pip install -e ".[render]"`。
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `zpl` | str | 必填 | 任意 ZPL；尺寸优先取 `^PW`/`^LL`，缺失才回退 104×152 mm |
+| `out_path` | str | `""` | 空则写到项目根 `render_preview.png` |
+| `scale` | int | `1` | 1–3，仅放大 PNG 像素；`dots` 始终是真实点数 |
+
+**输出**：`{ok, png, dots:[w,h], scale, drawn[], approximated[], ignored[], warnings[]}`
+
+- `drawn[]`：实际画出的元素，`{type, text?, dots:[x1,y1,x2,y2], width?, size?, lines?}`，几何值单位是 dot，可直接与 spec 里的坐标对账；
+- `approximated[]`：**画不准但必须告诉你的**（DataMatrix 等无离线编码器 → 占位框；`^FR` 反白按正常黑画；`^XGR` 图形 → 占位框）；
+- `warnings[]`：绘制时发现的几何问题，目前最有价值的一条是"文本比 `^FB` 块宽"；
+- `ignored[]`：认识但不影响页面的命令（`^MD`/`^PR`/`^MN`/`~SD` 等）。
+
+**保真度（实测，与 Zebra 自己渲染的同一段 ZPL 逐值对照）**：
+
+| 元素 | 保真度 | 依据 |
+|---|---|---|
+| `^A0` / `^A@` 文本 | 墨迹高度 ±1 dot，宽度 ±2% | `^A0N,43` + `NANJING`：本工具 156×33 dots，Zebra 153×34 |
+| Code128 / Code39 / EAN-13 / EAN-8 / UPC-A / I2of5 / Codabar / GS1-128 | 模块级精确 | 逐模块按 `^BY` 模块宽绘制；`^FO30` 起、101 模块 × 3 = 303 dots，与 Zebra 完全一致 |
+| QR | 模块级精确 | 模块宽 = `^BQ` 的 c；强制标准 QR（不生成 Micro QR）；原点偏移 1×3 模块 |
+| `^GB` / `^GC` | 精确 | 矩形/椭圆按参数画 |
+| DataMatrix / PDF417 / Aztec / MaxiCode / Code49 / Codablock / MSI / Code11 / Planet / Postnet / GS1 DataBar / UPC-E | **不画，占位框** | 无离线编码器；写入 `approximated` |
+| 打印机内置字体字形 | 近似 | 用 host 上的 msyh/DejaVu 代替 `E:SIMSUN.TTF` 等；字宽已按 `^A0` 校准 |
+| `^FR` 反白、`^XGR` 图形 | 近似 | 正常黑画 + 占位框，并列入 `approximated` |
+
+**它不是 ZPL 仿真器**，用途很窄但很值：判重叠、判越界、判文本溢出、判条码与相邻元素挤压。**不能用它判断能不能扫**——静区、模块实际印刷宽度、纠错级这些只有真机和扫码枪能答。
 
 ## 3. label spec 顶层键（`generate_zpl` 入参）
 
@@ -330,7 +361,7 @@ hermes mcp test zebra-printer        # → Connected, 8 tools discovered
 
 ### 11.2 注册后 agent 看到什么
 
-`tools/list` 返回 8 个工具，名称按客户端规范加前缀（Hermes 里是 `mcp__zebra_printer__<tool>`）。参数 schema 由函数签名自动生成，模型据此填参——**它不需要知道任何一条 ZPL 命令**。
+`tools/list` 返回 9 个工具，名称按客户端规范加前缀（Hermes 里是 `mcp__zebra_printer__<tool>`）。参数 schema 由函数签名自动生成，模型据此填参——**它不需要知道任何一条 ZPL 命令**。
 
 ### 11.3 三种调用层次
 
@@ -375,6 +406,7 @@ hermes mcp test zebra-printer        # → Connected, 8 tools discovered
 
 ```text
 generate_zpl(spec)              → issues 里有 error：改 spec，不要发
+render_zpl(zpl)                 → PNG：看重叠、越界、文本溢出（不用等纸）
 send_zpl(zpl, dry_run=true)     → 落盘 .zpl + 预览，人/agent 看一眼版式
 printer_status(host)            → identification 对得上机型 dpi 吗，status 是 0000 吗
 send_zpl(zpl, host=…)           → 空回显 = 没语法错；有回显 = 打印机报了错，原样回读
@@ -384,6 +416,8 @@ send_zpl(zpl, host=…)           → 空回显 = 没语法错；有回显 = 打
 |---|---|---|
 | `issues` 有 `error` | 语法/范围错，或制式不支持 | 改 spec，别打 |
 | 只有 `warning` | 能打，但可能扫不出（模块宽、静区、字体） | 打一张，扫一次 |
+| `render_zpl` 的 `warnings` 说文本比 `^FB` 宽 | 打出来会被裁掉或压到邻居 | 改字号/块宽/文案，再渲染 |
+| `render_zpl` 的 `approximated` 里有你的制式 | 预览没画它，别据此判断那个符号的位置 | 用 §5 的参数表核对，实机打一张 |
 | `send_zpl` 回显为空 | 打印机接受了整段 ZPL | 继续；纸面仍需扫码验收 |
 | 回显里有 `^XA` 相关错误 | 该标签块被拒 | 把回显原文交回来，按提示改 |
 | `printer_status` 非 `0000` | 缺纸/开盖/暂停/过热 | 先处理硬件，别怀疑 ZPL |

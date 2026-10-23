@@ -55,7 +55,7 @@ ZPL 是**无校验的文本协议**：语法错了打印机会照样吃，版式
 ### 2.3 三条额外的工程收益
 
 1. **手册可溯源**：`zpl_knowledge(mode="command", query="^BR")` 直接给语法、默认值、页码——模型"查"而不是"猜"，答案能被人核对。
-2. **确定性可审计**：同 spec 同字节 → 可以放进 git、可以写断言、可以对比新旧模板差异（本项目 29 组断言就是这么锁的）。
+2. **确定性可审计**：同 spec 同字节 → 可以放进 git、可以写断言、可以对比新旧模板差异（本项目 31 组断言就是这么锁的）。
 3. **无网络暴露面**：stdio 本地子进程，不监听端口、不需要 token、不出网。企业内网里这是最容易过审的形态。
 
 ---
@@ -80,8 +80,9 @@ Hermes 写 config 时 JSON 路径用**正斜杠**，且别直接手改 `config.y
 ```text
 ① generate_zpl(label_spec)   → { zpl, issues[], preview_file, ascii_preview }
 ② validate_zpl(zpl)          → { issues[], ok }         # 想手改 ZPL 时才需要
-③ send_zpl(zpl, dry_run=true)→ 不落纸，回预览文件        # 不确定版式时先看
-④ send_zpl(zpl, transport_kind="tcp", host="<打印机IP>")
+③ render_zpl(zpl)            → PNG + drawn[]/warnings[]  # 版式对不对，一眼看出
+④ send_zpl(zpl, dry_run=true)→ 不落纸，回预览文件        # 不确定版式时再兜一层
+⑤ send_zpl(zpl, transport_kind="tcp", host="<打印机IP>")
 ```
 
 最小可用 spec（坐标单位 mm，dpi 203 自动换算成 dots）：
@@ -227,7 +228,7 @@ zpl_from_image(image_path="D:/标签.png", width_mm=60, height_mm=40,
 
 给 key 的两种方式都由调用方决定：**单次传给工具**，或**注册 MCP 时写进 `env`**（`ZEBRA_VISION_URL`/
 `ZEBRA_VISION_KEY`/`ZEBRA_VISION_MODEL`），之后的调用不用再带。key 只在一次请求头里用过：
-不回显、不进 `issues`/`warnings`、不写日志、不落盘；错误信息会截断并替换掉 key（第 30 组断言专门锁这条）。
+不回显、不进 `issues`/`warnings`、不写日志、不落盘；错误信息会截断并替换掉 key（第 30 组断言专门锁这条；第 31 组锁渲染几何）。
 
 安全边界（重要）：**条码内容只信 zxing 解码**。模型报的条码值当"提示"处理——只有 zxing 一个都没解出来时
 才用它兜底，并标记 `unverified: true` + `BARCODE_UNVERIFIED` 警告。多模态模型读错一位数字太常见，
@@ -237,15 +238,37 @@ zpl_from_image(image_path="D:/标签.png", width_mm=60, height_mm=40,
 
 ---
 
+### 3.7 看图：`render_zpl` 先渲染，再决定要不要打
+
+静态校验只能告诉你"命令拼错了没有"，**版式对不对它不知道**。`render_zpl` 把 ZPL 画成 PNG，纯本地、约 50 ms：
+
+```text
+generate_zpl(spec) → render_zpl(zpl) → 看 PNG → 改坐标/字号 → 再渲染 → send_zpl
+```
+
+三步就能抓住校验器抓不到的四类毛病：
+
+| 症状 | 渲染图上长什么样 | 改法 |
+|---|---|---|
+| 条码比可用宽度长，压到二维码 | 两个符号贴在一起甚至重叠 | 缩短数据、`module_width` 降到 1–2、或换 Code39→Code128 |
+| 汉字比预期宽，出标签右边 | 文字被切断在 `^PW` 之外 | 减小 `size_mm`、改 `^FB` 块宽、或换短文案 |
+| 多字段挤成一团 | 视觉上一眼就看出 | 调 `y_mm` 行距 |
+| `^FB` 块太窄 | 返回的 `warnings[]` 直接说"比块宽" | 放宽块宽或减字 |
+
+返回里的 `drawn[]` 带每个元素的 dot 边界，模型可以**用数字对账**而不是只靠眼睛：`drawn[1].dots == [30, 21, 332, 111]` 就是条码的四个角。
+
+代价与边界：只画本工具认得的子集，DataMatrix/PDF417 这类没有离线编码器的会退回占位框（`approximated[]` 里明说）；字体是 host 字体近似，字宽按 `^A0` 校准到 ±2%。**渲染漂亮 ≠ 能扫**，静区与印刷质量仍然要真机验。
+
 ## 4. 能实现的功能模块
 
-### 4.1 八个工具（对外能力面）
+### 4.1 九个工具（对外能力面）
 
 | 工具 | 入参 | 返回 | 实测耗时 | 依赖 |
 |---|---|---|---|---|
 | `zpl_knowledge` | `mode`（command/search/barcodes/sgd/status/list）、`query` | 语法+默认值+页码 / 制式规则 / 状态码表 | <1 ms | 无 |
 | `generate_zpl` | `label_spec` | `{zpl, issues[], preview_file, ascii_preview}` | ≈0.1 ms | 无 |
 | `validate_zpl` | `zpl` | `{issues[], ok}`（四层：`^FD` 抹除 → 253 命令目录 → QR 前缀 → `^XA/^XZ` 配对） | ≈0.15 ms | 无 |
+| `render_zpl` | `zpl`、`scale` | `{png, dots[], drawn[], approximated[], warnings[]}` | ≈50 ms（首帧含字体） | pillow / segno / python-barcode |
 | `list_printers` | — | 队列名/端口/驱动/状态 | 0.3–1 s | Windows PowerShell |
 | `send_zpl` | `zpl`、`transport_kind`(tcp/windows/usb/preview)、`host`/`printer`/`port`、`dry_run` | 发送结果 + 回显 | ≈1.0 s（tcp） | 网络或队列 |
 | `printer_status` | `host`、`port`、`sgd`、`timeout` | `{identification(~HI), status(~HS 第3行), sgd{}, native_status}` | ≈3.9 s | 网络 |
@@ -259,13 +282,14 @@ zpl_from_image(image_path="D:/标签.png", width_mm=60, height_mm=40,
 | `builder.py` | 713 | spec→ZPL（含 27 制式 `BARCODE_SPECS`、图形、单位换算、范围校验、`validate_zpl`） |
 | `knowledge.py` | 337 | 253 命令目录、69 条命令页、27 制式规则、27 条 SGD、13 个状态码 |
 | `transport.py` | 257 | 编码仲裁（`^CI28`+UTF-8）、TCP、winspool RAW、ASCII 预览 |
-| `server.py` | 407 | 八个工具、SGD↔原生（`~HI`/`~HS`）状态回退 |
+| `server.py` | 437 | 九个工具、SGD↔原生（`~HI`/`~HS`）状态回退 |
 | `catalog.py` | 15 | 把手册目录注入校验器 |
 | `photo.py` | 400 | 照片→spec：找标签/透视校正、解码、几何映射、`^BY` 反推 |
 | `vision.py` | 179 | 可选视觉 LLM 通道（OpenAI 兼容 chat/completions） |
 | `ocr.py` | 242 | PP-OCRv4 det+rec（ONNX），DB 后处理 + CTC 解码 |
 | `xlsx_batch.py` | 185 | 标准库读 xlsx（zip+XML）、列解析、行→spec、Code128 宽度算居中、多标签单流 |
-| `tests/test_builder.py` | 408 | 30 组断言（位序、QR 前缀、`^A@`、编码、预览、知识库覆盖、xlsx 批量、逐轴坐标、照片→ZPL 几何与回环） |
+| `tests/test_builder.py` | 479 | 31 组断言（位序、QR 前缀、`^A@`、编码、预览、知识库覆盖、xlsx 批量、逐轴坐标、照片→ZPL 几何与回环、渲染几何与 Zebra 逐值对照） |
+| `src/zebra_mcp/render.py` | 350 | 离线 ZPL→PNG：单遍状态机 + `^A0` 宽度校准 + python-barcode/segno 绘制 |
 
 ### 4.3 覆盖范围（能做的）
 
@@ -291,7 +315,7 @@ zpl_from_image(image_path="D:/标签.png", width_mm=60, height_mm=40,
 | **老标签数字化**（只有纸质样张，没有源文件） | `zpl_from_image` 解码 + OCR + 几何映射，几十秒出可编辑的 spec/ZPL | 拍一张旧标签 → 出 ZPL → 改文字重打 |
 | **现场调试**（手边没有 BarTender，只有一台网口打印机） | TCP 直发 + 回显 + `printer_status`，不装驱动 | "打印机打不出来，先看状态字" |
 | **中文标签** | 编码与字体配方已封装，实测过 | 中文品名 + 条码 + 二维码一张出 |
-| **标签模板治理** | 同 spec 同字节 → 可 diff、可回归、可 code review | 把标签当代码管，改模板跑 29 组断言 |
+| **标签模板治理** | 同 spec 同字节 → 可 diff、可回归、可 code review | 把标签当代码管，改模板跑 31 组断言 |
 | **教学 / 技术交流** | `zpl_knowledge` 让"手册"变成可问的对象；错误码能把坑讲清楚 | 现场演示"错一位参数会发生什么" |
 | **给业务系统加个 AI 出口**（MES/ERP 助手） | 业务侧只给结构化字段，打印细节不外泄 | 拣货完成 → 自动出箱标 |
 | **多模型混用** | 工具契约稳定，换模型不改调用方 | Claude/DeepSeek/GPT 共用一套 |

@@ -5,7 +5,7 @@ ZPL 标签生成 + Zebra Link-OS 打印机控制的 **stdio MCP 服务器**（Wi
 > **技术交流完整版文档**：[`docs/MCP-技术交流文档.md`](docs/MCP-技术交流文档.md)（协议、ZPL 细节、踩坑清单）
 >
 > **AI 调用选型指南**：[`docs/MCP-AI调用指南.md`](docs/MCP-AI调用指南.md)（为什么适合 AI 用、怎么用、**什么场景不该用**）
-> （架构图、8 工具详解、label spec 全键表、ZR668 实机数据、中文打印配方、stdio 探针纪律、20 条踩坑清单）
+> （架构图、9 工具详解、label spec 全键表、ZR668 实机数据、中文打印配方、stdio 探针纪律、离线渲染预览、20 条踩坑清单）
 
 知识底座：ZPL II Programming Guide（Zebra 官方 PDF，本机全文抽取）+ Link-OS 文档 <https://techdocs.zebra.com/link-os/latest/> 。实机验证：Zebra ZR668-200dpi（固件 V86.20.21Z）— 网络打印、状态查询、中文打印全部跑通。
 
@@ -22,23 +22,44 @@ uv venv .venv --python 3.12      # 或 python -m venv .venv
 
 # 自检（不需要打印机）
 .venv/bin/python tests/test_builder.py    # → ALL TESTS PASSED
-.venv/bin/python scripts/mcp_probe.py     # raw JSON-RPC 探针，列出 8 工具
+.venv/bin/python scripts/mcp_probe.py     # raw JSON-RPC 探针，列出 9 工具
 ```
 
 > **必须 `mcp<2`**：2.x 移除了 `mcp.server.fastmcp`，pyproject 已钉 `mcp>=1.9,<2`。
 
-## 8 个 MCP 工具
+## 9 个 MCP 工具
 
 | 工具 | 作用 |
 |---|---|
 | `generate_zpl` | JSON label spec → ZPL II（mm 坐标自动换算 dot；内置手册默认值/范围校验，返回 issues） |
 | `validate_zpl` | 用手册解析出的命令目录校验任意 ZPL |
 | `zpl_knowledge` | 查命令语法/默认值/页码、SGD 命令、`~HS` 状态码、条码制式目录 |
+| `render_zpl` | 把 ZPL 渲染成 PNG，离线看图再决定要不要打 |
 | `list_printers` | 枚举 Windows 打印队列（找 Zebra 队列） |
 | `send_zpl` | 发送：`tcp`(9100 raw) / `windows`(假脱机) / `usb` / `preview`；`dry_run` 只校验+预览 |
 | `printer_status` | 查询打印机状态：Link-OS SGD 优先，老固件自动回退原生 `~HI`/`~HS` |
 | `print_xlsx` | 读 `.xlsx` 两列（姓名 + 员工号），一行一张标签、文本与 128 码各自居中，整批一个 ZPL 流 |
 | `zpl_from_image` | 一张现有标签的照片 → 解码条码/二维码 + OCR 文字 + 像素换算 dot → ZPL；可 dry_run 或直发 |
+
+## 看得到再打：`render_zpl`（离线渲染预览）
+
+校验器管语法，管不了"字压到条码上了"。`render_zpl` 把 ZPL 画成 PNG，纯本地，约 50 ms：
+
+```bash
+pip install -e ".[render]"          # pillow + segno + python-barcode，三个纯 Python 依赖
+```
+
+```json
+{"zpl": "^XA^PW400^LL240…^XZ", "scale": 3}
+```
+
+返回 `{ok, png, dots:[400,240], drawn[], approximated[], warnings[]}`；`drawn[]` 里每个元素带 dot 边界，可以直接和 spec 坐标对账。
+
+![render preview](docs/images/render_preview.png)
+
+**保真度**（同一段 ZPL 与 Zebra 自己的渲染逐值对照）：`^A0N,43` 的 `NANJING` 本工具 156×33 dots / 真机 153×34；Code128 101 模块 × `^BY3` = 303 dots、起于 x=30，与真机完全一致；QR 21 模块、模块宽 = `^BQ` 的 c，位置也一致；`^GB`/`^GC` 精确。
+
+**故意不做的**：DataMatrix / PDF417 / Aztec / MaxiCode 等没有离线编码器，只画占位框并在 `approximated[]` 里点名；打印机内置字体用 host 字体近似；`^FR` 反白按正常黑画。**它是版式预览，不是 ZPL 仿真器**——能告诉你"会重叠 / 会出界 / 会溢出"，不能告诉你"能不能扫"。
 
 ## label spec 示例（generate_zpl 入参）
 

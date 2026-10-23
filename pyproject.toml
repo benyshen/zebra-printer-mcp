@@ -1,6 +1,6 @@
 [project]
 name = "zebra-printer-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "ZPL label generation + Zebra Link-OS printer control MCP server (Windows, stdio transport). Knowledge grounded in the ZPL II Programming Guide (zpl-zbi2-pg-en-202609)."
 requires-python = ">=3.10"
 dependencies = [
@@ -10,6 +10,13 @@ dependencies = [
 [project.optional-dependencies]
 # photo -> ZPL only: the core server stays dependency-free for people who just
 # want to generate labels from text
+# render -> offline ZPL-to-PNG preview so an agent can look at the label; small,
+# pure-Python friends of Pillow, no cloud round trip
+render = [
+    "pillow>=10.0",
+    "segno>=1.5",
+    "python-barcode>=0.15",
+]
 photo = [
     "opencv-python-headless>=4.9",
     "numpy>=1.24",

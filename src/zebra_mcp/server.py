@@ -132,6 +132,36 @@ def validate_zpl(zpl: str) -> str:
 
 
 @mcp.tool()
+def render_zpl(zpl: str, out_path: str = "", scale: int = 1) -> str:
+    """Render ZPL to a PNG file so you can see the label before spending paper.
+
+    Offline: no cloud service, no printer. This is a layout preview, not a ZPL
+    emulator — text metrics are calibrated to Zebra ^A0 (ink height within ~2%,
+    width within ~1%), the mainstream 1D symbologies and QR are drawn faithfully,
+    ^GB/^GC boxes are exact, and everything it cannot draw honestly is listed in
+    `approximated` (DataMatrix/PDF417/Aztec/MaxiCode fall back to a labelled box).
+
+    Use it to catch what the validator cannot: overlaps, a field hanging off the
+    edge, text wider than its ^FB block, a barcode running into the neighbour.
+    `warnings` reports geometric problems found while drawing.
+
+    scale=2 or 3 renders larger pixels for easier reading; `dots` is always the
+    true label size in printer dots, so don't confuse the two.
+    """
+    try:
+        from .render import render as _render
+    except ImportError as exc:                     # optional extra
+        return _json({"ok": False,
+                      "error": f"render needs the [render] extra: pip install -e '.[render]' ({exc})"})
+    out = out_path or ""
+    try:
+        result = _render(zpl, scale=max(1, int(scale)), out=out or None)
+    except Exception as exc:
+        return _json({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+    return _json(result)
+
+
+@mcp.tool()
 def list_printers() -> str:
     """List Windows printer queues (name/port/driver/status) to find a Zebra queue."""
     return _json(transport.list_windows_printers())
