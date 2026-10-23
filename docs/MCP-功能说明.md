@@ -297,3 +297,122 @@ zpl_from_image("D:/标签.png", width_mm=60, height_mm=40, frame="auto", dry_run
 1. `issues` 里有 `error` 不打印；`warning` 要看（多数是「能打但可能扫不出」）。
 2. 文本改了 `data` 就重发，不要手工改 ZPL——`^FD` 的转义与 `^CI` 是联动的。
 3. 一次多张就拼一个流（`print_xlsx` 已这么做），别逐张调用。
+---
+
+## 11. 作为 agent 的调用手册
+
+§2 是接口规格（谁、吃什么、吐什么）。这一节是**使用视角**：一个 agent 或写 agent 的人，实际怎么把它用起来。
+
+### 11.1 注册（一次性，进程由客户端拉起）
+
+MCP 是 stdio 进程，客户端负责启动，所以先登记启动命令。
+
+```bash
+# Hermes
+hermes config set mcp_servers.zebra-printer '{"command":"<repo>/.venv/Scripts/python.exe","args":["-m","zebra_mcp.server"],"cwd":"<repo>","connect_timeout":30.0,"enabled":true}'
+hermes mcp test zebra-printer        # → Connected, 8 tools discovered
+```
+
+```json
+// Claude Desktop / 其它 stdio 客户端
+{"mcpServers": {"zebra-printer": {
+  "command": "<repo>/.venv/Scripts/python.exe",
+  "args": ["-m", "zebra_mcp.server"],
+  "cwd": "<repo>",
+  "env": {"ZEBRA_VISION_URL": "http://<端点>/v1",
+          "ZEBRA_VISION_KEY": "<key>",
+          "ZEBRA_VISION_MODEL": "qwen2.5-vl-7b-instruct"}}}}
+```
+
+`env` 只有用视觉大模型认字时才需要；不给就走本地 PP-OCRv4。JSON 里用正斜杠路径（`\w` 这类反斜杠会被转义吃掉）。
+
+不想装 MCP 客户端也能验证连通：`python scripts/mcp_probe.py` 走裸 JSON-RPC 列出工具。
+
+### 11.2 注册后 agent 看到什么
+
+`tools/list` 返回 8 个工具，名称按客户端规范加前缀（Hermes 里是 `mcp__zebra_printer__<tool>`）。参数 schema 由函数签名自动生成，模型据此填参——**它不需要知道任何一条 ZPL 命令**。
+
+### 11.3 三种调用层次
+
+**① 自然语言**（最常见，用户说人话，agent 自己选工具）
+
+| 你想做 | 该说清的事实 | 落到哪个工具 |
+|---|---|---|
+| 出一张标签 | 尺寸、dpi、要打的内容、打到哪台机器 | `generate_zpl` → `send_zpl` |
+| 批量出 | xlsx 路径、两列的定位、版式尺寸 | `print_xlsx`（一个流发完） |
+| 复刻旧标签 | 照片路径 + **物理尺寸**（像素→点唯一比例尺） | `zpl_from_image` |
+| 排查打不出 | 机器 IP | `printer_status` → `send_zpl(dry_run)` |
+| 问某条码能不能打 | 制式名 | `zpl_knowledge(mode="barcodes")` |
+
+**② 直接工具调用**（agent 内部、或你写代码时）
+
+参数就是一个 label spec（§3/§4）。下面这条是真实跑出来的：
+
+```json
+{"label_spec": {"dpi": 203, "width_mm": 60, "height_mm": 40, "fields": [
+  {"type":"text","data":"NANJING","x_mm":40,"y_mm":29,"size_mm":5.4},
+  {"type":"barcode","symbology":"code128","data":"ABC123","x_mm":3.8,"y_mm":2.6,
+   "height_mm":9.4,"module_width":3},
+  {"type":"barcode","symbology":"qrcode","data":"NGSU","x_mm":47,"y_mm":3,"scale":3}]}}
+```
+
+```json
+{"zpl": "^XA^PW480^LL320^FO320,232^A0N,43^FDNANJING^FS^FO30,21^BY3,3,10^BCN,75^FDABC123^FS^FO376,24^BQN,,3^FDQA,NGSU^FS^XZ",
+ "issues": [], "preview_file": "…\\label_preview_34572.zpl", "ascii_preview": "+---…"}
+```
+
+**③ 裸 JSON-RPC**（自己写 client，不装 MCP SDK）
+
+```text
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"me","version":"1"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"generate_zpl","arguments":{"label_spec":{…}}}}
+```
+
+纪律：一次一请求、每次读一行响应；`initialize` 之后必须先发 `notifications/initialized`，否则部分实现会拒后续调用。现成实现见 `scripts/mcp_probe.py`（61 行，纯标准库）。
+
+### 11.4 四步循环（每一层都有停止判据）
+
+```text
+generate_zpl(spec)              → issues 里有 error：改 spec，不要发
+send_zpl(zpl, dry_run=true)     → 落盘 .zpl + 预览，人/agent 看一眼版式
+printer_status(host)            → identification 对得上机型 dpi 吗，status 是 0000 吗
+send_zpl(zpl, host=…)           → 空回显 = 没语法错；有回显 = 打印机报了错，原样回读
+```
+
+| 观察到 | 含义 | 动作 |
+|---|---|---|
+| `issues` 有 `error` | 语法/范围错，或制式不支持 | 改 spec，别打 |
+| 只有 `warning` | 能打，但可能扫不出（模块宽、静区、字体） | 打一张，扫一次 |
+| `send_zpl` 回显为空 | 打印机接受了整段 ZPL | 继续；纸面仍需扫码验收 |
+| 回显里有 `^XA` 相关错误 | 该标签块被拒 | 把回显原文交回来，按提示改 |
+| `printer_status` 非 `0000` | 缺纸/开盖/暂停/过热 | 先处理硬件，别怀疑 ZPL |
+
+### 11.5 提示词写法（决定成败的一半）
+
+| 别这么说 | 这么说 |
+|---|---|
+| "生成 ZPL 打印" | "60×40 mm、203 dpi 的标签：左上 Code128 内容 ABC123，右上二维码指向 https://… ，底部 NANJING，先 dry_run" |
+| "循环打 N 次" | "这个 xlsx，一列姓名一列工号打 128 码、居中" → 走 `print_xlsx`，整批一个流 |
+| "照这个样式做一张" | 给照片 + **物理尺寸** + 要不要用视觉大模型认字 |
+| "支持 DataMatrix 吗" | "调 `zpl_knowledge(mode='barcodes')` 查制式表，给出命令与参数位序" |
+
+物理事实（尺寸、dpi、机器地址、份数）必须由人给；这些猜错不会报错，只会打出比例错误的标签。
+
+### 11.6 五个默认值与边界坑
+
+1. **`send_zpl` 的 `dry_run` 默认 false**——agent 想"先看看"，必须显式传 `dry_run=true`，否则一调就出纸。
+2. **Windows/USB 队列的 `job_id` 只证明入队成功**，不证明纸出来了；要确凿证据只用 `tcp` 并看回显。
+3. **stdio 进程跟着客户端活**：客户端退出、会话结束，进程就没了；没有重试、没有队列。常驻需求见 §9。
+4. **一次多张拼一个流**（`print_xlsx` 已这么做）。逐张调用 = 每张都等一次回显，500 张差一个数量级。
+5. **视觉大模型 key 不要写进对话**：放客户端 MCP 配置的 `env`；工具本身不会回显它，错误信息也会脱敏。
+
+### 11.7 不经 agent：命令行孪生
+
+```bash
+python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 --dry-run
+python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 --execute --host <打印机IP>
+```
+
+表格批量有 CLI 孪生（默认 dry-run，`--execute` 才发送）。生成单张标签没有等价 CLI，用 JSON-RPC 探针即可。
+
