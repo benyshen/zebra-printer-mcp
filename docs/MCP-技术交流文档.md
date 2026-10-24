@@ -280,6 +280,16 @@ PowerShell `Get-Printer` 枚举（Name/PortName/DriverName/PrinterStatus/Shared�
 返回值里 `elements[]` 是给人复核的（`kind/format/text/dots/module_width/bar_height/hri`），`validation` 是
 `builder.validate_zpl` 的原样结果，`scale` 是本次 px→dot 的比例。
 
+**它重建符号和文字，不重建表格线。** 一张 70×70 的三行表标签，重建结果会拿到全部文字、条码、以及它们
+各自的坐标，但外框和两条分隔线不会出现在 ZPL 里——这两类线要自己补（`^GB` 四行）。为什么不做：手机
+拍出来的线条有 1–3° 倾斜，倾斜 2° 在 1600 px 上就横跨 56 行，任何"横向核"思路都会把线切碎；换成 Hough
+后线条能找到，但纸边、阴影和条码外框的直边会一起被当成表格线（实测同一张图上多出 5 条假线，同时漏掉
+1 条真线）。宁可说清楚缺这一点，也不让 agent 拿到一张"看起来有表格、其实线错位"的 ZPL。
+
+**OCR 噪点会被丢弃**：`^A` 的可缩放高度下限是 10 dots（手册 p.60），比这更矮的框不可能是可打印文字，
+一律丢并记 `OCR_DROPPED`。这条不是洁癖——修之前，照片上一个 3.5 dots 的黑点被认成 `a`，生成了
+`^A0N^FDa`，触发 `TEXT_SIZE` 错误，整张标签被判不合格。
+
 识别通道二选一（`source` 字段会告诉你是哪条）：
 
 | 参数 | 缺省 | 说明 |

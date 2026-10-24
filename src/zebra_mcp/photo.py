@@ -327,8 +327,23 @@ def convert(image: str | Path, *, width_mm: float = 60.0, height_mm: float = 40.
         kept.append(t)
     texts = kept
 
+    # A 4-pixel smudge is not a text field: ^A's minimum scalable height is 10 dots
+    # (manual p.60), so anything shorter cannot be printed at all — it is speckle.
+    kept = []
+    for t in texts:
+        _d = to_dots(t["box"])
+        height_dots = _d[3] - _d[1]
+        if height_dots < 10:
+            warnings.append({"code": "OCR_DROPPED",
+                             "message": f"{t['text']!r} is {height_dots:.0f} dots tall, below the "
+                                        f"^A minimum of 10 — treated as speckle, not text"})
+            continue
+        kept.append(t)
+    texts = kept
+
     fields: list[dict] = []
     elements: list[dict] = []
+
     for sym in symbols:
         d = to_dots(sym["box"])
         bw, bh = d[2] - d[0], d[3] - d[1]
