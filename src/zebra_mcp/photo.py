@@ -46,6 +46,7 @@ _TWO_D = {"QRCode", "MicroQRCode", "DataMatrix", "PDF417", "MicroPDF417", "Aztec
 # ~0.51 x size, CJK advance ~1.0 x size
 _CAP_RATIO = 0.775
 _ASCII_ADV = 0.51
+_WIDTH_SLACK = 0.92        # ink width / advance width, measured
 BAR_ROW_RATIO = 0.30          # ink ratio that separates bars from HRI text
 MIN_MODULE_DOTS = 2           # 203dpi floor; below this the symbol will not scan
 
@@ -100,12 +101,26 @@ def find_label_quad(img) -> np.ndarray | None:
     return None if best is None else _order_quad(best)
 
 
-def warp_label(img, quad, long_edge: int = 1600):
+def warp_label(img, quad, long_edge: int = 1600, aspect: float | None = None):
+    """Rectify the paper quad to a rectangle, optionally of a *known* aspect.
+
+    Passing aspect is not cosmetic. A square label photographed at an angle is a
+    trapezoid: its outline measures 1.12 x 1.00 in the photo. Warping that outline
+    to its own bounding aspect bakes the 12% error in, and the content then scales
+    down by the same 12% in the square label frame. With the real aspect (label
+    w/h) the four corners are mapped onto a true rectangle, which is exactly the
+    perspective rectification the photos need.
+    """
     tl, tr, br, bl = quad
     w = int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))
     h = int(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))
     if w <= 0 or h <= 0:
         return img
+    if aspect and aspect > 0:
+        if w >= h:
+            h = max(1, int(round(w / aspect)))
+        else:
+            w = max(1, int(round(h * aspect)))
     scale = long_edge / float(max(w, h))
     size = (max(int(w * scale), 1), max(int(h * scale), 1))
     dst = np.float32([[0, 0], [size[0] - 1, 0], [size[0] - 1, size[1] - 1], [0, size[1] - 1]])
@@ -170,15 +185,23 @@ def _inside_frac(box, ref) -> float:
     return ix * iy / area
 
 
+# Total module counts for the fixed-width retail symbols. The generic estimate
+# below gave EAN-13 178 modules instead of 95, which halved the module width and
+# silently printed the barcode 10 mm narrower than the original.
+_FIXED_MODULES = {"ean13": 95, "upca": 95, "ean8": 67, "upce": 51}
+
+
 def _modules_1d(text: str, symbology: str | None) -> int:
     n = len(text)
-    if symbology == "code128":
+    if symbology in _FIXED_MODULES:
+        return _FIXED_MODULES[symbology]
+    if symbology in ("code128", "gs1_128"):
         digits = text.isdigit() and n >= 4
         symbols = (n + 1) // 2 if digits else n      # set C packs two digits
         return 11 * symbols + 35
     if symbology == "code39":
         return 16 * n + 25
-    return 11 * n + 35
+    return 11 * n + 35                               # estimate for the rest
 
 
 def _qr_modules(text: str) -> int:
@@ -199,22 +222,33 @@ def convert(image: str | Path, *, width_mm: float = 60.0, height_mm: float = 40.
             dpi: int = 203, frame: str = "auto", use_ocr: bool = True,
             font_file: str = "E:SIMSUN.TTF", min_conf: float = 0.5,
             llm_url: str = "", llm_key: str = "", llm_model: str = "",
-            vision_timeout: float = 60.0) -> dict:
+            vision_timeout: float = 60.0,
+            paper_mm: float = 0.0, paper_height_mm: float = 0.0,
+            offset_x_mm: float = 0.0, offset_y_mm: float = 0.0) -> dict:
     """Photo -> {zpl, spec, elements, warnings} (no printing, no side effects).
 
     Text comes from PP-OCRv4 when the local weights are present, otherwise from a
     vision LLM when llm_url/llm_key/llm_model (or ZEBRA_VISION_*) is configured.
     Barcode content always comes from zxing: a VLM's digits are not verifiable.
+
+    paper_mm / paper_height_mm: the size of the physical paper you photographed,
+    when it is bigger than the printed area (common on die-cut stock: a 77 mm label
+    carrying a 70 mm design). The detected edge is the paper, so without this the
+    whole design is scaled down by the paper/design ratio -- measured at 8-10% on a
+    77 mm label, which is exactly the "everything is slightly smaller" complaint.
+    Leave 0 to assume the paper edge is the print area.
     """
     if not Path(image).exists():
         return {"ok": False, "error": f"image not found: {image}"}
     img = read_image(image)
     warnings: list[dict] = []
     basis = "full"
+    paper_w = paper_mm if paper_mm and paper_mm > 0 else width_mm
+    paper_h = paper_height_mm if paper_height_mm and paper_height_mm > 0 else height_mm
     if frame in ("auto", "label"):
         quad = find_label_quad(img)
         if quad is not None:
-            img, basis = warp_label(img, quad), "label"
+            img, basis = warp_label(img, quad, aspect=paper_w / paper_h), "label"
         elif frame == "label":
             warnings.append({"code": "NO_QUAD",
                              "message": "no label quad found; falling back to the whole photo"})
@@ -227,13 +261,23 @@ def convert(image: str | Path, *, width_mm: float = 60.0, height_mm: float = 40.
                          "message": f"photo aspect {src_ratio:.2f} vs label {dst_ratio:.2f} — "
                                     f"check width_mm/height_mm, a wrong template scales every "
                                     f"element and the error grows towards the bottom"})
-    # uniform scale + centring, never per-axis stretch
-    scale = min(pw / float(w_px), ll / float(h_px))
+
+    # The warped frame is the PAPER; the design sits inside it. Map px through the
+    # paper size, then centre the print area within the paper, so a 70 mm design on
+    # a 77 mm label keeps its real size instead of shrinking by 70/77.
+    pw_paper, ll_paper = builder.mm2dots(paper_w, dpi), builder.mm2dots(paper_h, dpi)
+    scale, scale_y = pw_paper / float(w_px), ll_paper / float(h_px)
+    if abs(scale / scale_y - 1) > 0.02:
+        scale = min(scale, scale_y)                 # never stretch one axis alone
     off_x, off_y = (pw - w_px * scale) / 2.0, (ll - h_px * scale) / 2.0
+
+    nudge_x = builder.mm2dots(offset_x_mm, dpi) if offset_x_mm else 0.0
+    nudge_y = builder.mm2dots(offset_y_mm, dpi) if offset_y_mm else 0.0
 
     def to_dots(box):
         x1, y1, x2, y2 = box
-        return [off_x + x1 * scale, off_y + y1 * scale, off_x + x2 * scale, off_y + y2 * scale]
+        return [off_x + x1 * scale + nudge_x, off_y + y1 * scale + nudge_y,
+                off_x + x2 * scale + nudge_x, off_y + y2 * scale + nudge_y]
 
     symbols = decode_symbols(img)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
@@ -300,10 +344,16 @@ def convert(image: str | Path, *, width_mm: float = 60.0, height_mm: float = 40.
             tx1, ty1, tx2, ty2 = t["box"]
             bar_h = max(1.0, by2 - by1)
             gap = ty1 - by2
-            overlap = max(0.0, min(tx2, bx2) - max(tx1, bx1)) / max(1.0, tx2 - tx1)
+            # widen the symbol's span before testing overlap: EAN-13 prints its first
+            # digit *left of* the bars, so a strict overlap test leaves that digit
+            # behind and it gets printed twice (once by the HRI line, once as text)
+            slack = 0.2 * (bx2 - bx1)
+            overlap = max(0.0, min(tx2, bx2 + slack) - max(tx1, bx1 - slack)) / max(1.0, tx2 - tx1)
             if -0.25 * bar_h <= gap <= 1.2 * bar_h and overlap >= 0.30:
                 sim = difflib.SequenceMatcher(None, _norm(t["text"]), _norm(s["text"])).ratio()
-                if sim >= 0.5:
+                # similarity is only a tie-breaker: a lone misread digit scores ~0 and
+                # would otherwise be printed *and* drawn by the symbol's own HRI line
+                if sim >= 0.5 or len(_norm(t["text"])) <= 2:
                     s["hri"] = True
                     merged = True
                     warnings.append({"code": "HRI_MERGED",
@@ -340,6 +390,24 @@ def convert(image: str | Path, *, width_mm: float = 60.0, height_mm: float = 40.
             continue
         kept.append(t)
     texts = kept
+
+    # A torn paper edge or an off-centre design can map content past the top-left
+    # corner; one global translate brings it back without distorting anything.
+    _boxes = [to_dots(s["box"]) for s in symbols] + [to_dots(t["box"]) for t in texts]
+    if _boxes:
+        _dx = max(0.0, 2.0 - min(b[0] for b in _boxes))
+        _dy = max(0.0, 2.0 - min(b[1] for b in _boxes))
+        if _dx or _dy:
+            _base = to_dots
+
+            def to_dots(box, _b=_base, _x=_dx, _y=_dy):
+                x1, y1, x2, y2 = _b(box)
+                return [x1 + _x, y1 + _y, x2 + _x, y2 + _y]
+
+            warnings.append({"code": "SHIFTED",
+                             "message": f"content mapped {_dx:.0f}/{_dy:.0f} dots outside the "
+                                        f"label; everything was shifted back on-canvas "
+                                        f"(paper margin or a torn edge)"})
 
     fields: list[dict] = []
     elements: list[dict] = []
@@ -383,7 +451,9 @@ def convert(image: str | Path, *, width_mm: float = 60.0, height_mm: float = 40.
         d = to_dots(t["box"])
         bw, bh = d[2] - d[0], d[3] - d[1]
         size = bh / _CAP_RATIO                    # from cap height
-        size = min(size, bw / _advance(t["text"]))  # never wider than the ink box
+        # ink width is ~0.92 of the advance width, so clamping by the raw ink box
+        # shrinks every text run by 8% — measured on a label we had printed ourselves
+        size = min(size, bw / (_advance(t["text"]) * _WIDTH_SLACK))
         size = max(8.0, min(size, 320.0))
         field = {"type": "text", "data": t["text"], "x_mm": _mm(d[0], dpi),
                  "y_mm": _mm(d[1], dpi), "size_dots": int(round(size))}

@@ -100,7 +100,7 @@
 
 规则：首行当表头（`skip_header=false` 可关）；**工号列为空的行跳过**；姓名用 `^FB …,C` 由打印机居中，条码按 `11×(n+2)+13` 模块算宽度算术居中；整批拼成**一个 ZPL 流、一次 TCP**（5 张 ≈1.0 s）。
 
-### 2.8 `zpl_from_image(image_path, width_mm=60, height_mm=40, dpi=203, frame="auto", use_ocr=True, font_file="E:SIMSUN.TTF", host="", port=9100, dry_run=True, llm_url="", llm_key="", llm_model="", vision_timeout=60)`
+### 2.8 `zpl_from_image(image_path, width_mm=60, height_mm=40, dpi=203, frame="auto", use_ocr=True, font_file="E:SIMSUN.TTF", host="", port=9100, dry_run=True, llm_url="", llm_key="", llm_model="", vision_timeout=60, paper_mm=0, paper_height_mm=0, offset_x_mm=0, offset_y_mm=0)`
 
 **输入**：标签照片 + **物理尺寸**（像素→点的唯一比例尺）；可选视觉大模型通道（OpenAI 兼容，`ZEBRA_VISION_URL/_KEY/_MODEL` 环境变量兜底）。
 **输出**：`{ok, zpl, elements[], decoded[], warnings[], issues[], validation, zpl_file, source, scale, photo_px, label_dots, symbol_count, text_count, sent?}`

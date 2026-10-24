@@ -382,7 +382,9 @@ def zpl_from_image(image_path: str, width_mm: float = 60.0, height_mm: float = 4
                    dpi: int = 203, frame: str = "auto", use_ocr: bool = True,
                    font_file: str = "E:SIMSUN.TTF", host: str = "", port: int = 9100,
                    dry_run: bool = True, llm_url: str = "", llm_key: str = "",
-                   llm_model: str = "", vision_timeout: float = 60.0) -> str:
+                   llm_model: str = "", vision_timeout: float = 60.0,
+                   paper_mm: float = 0.0, paper_height_mm: float = 0.0,
+                   offset_x_mm: float = 0.0, offset_y_mm: float = 0.0) -> str:
     """Turn a photo of an existing label into ZPL (and optionally print it).
 
     Reconstruction, not design: symbols are decoded (zxing-cpp), text is read
@@ -396,6 +398,15 @@ def zpl_from_image(image_path: str, width_mm: float = 60.0, height_mm: float = 4
     width_mm/height_mm : the physical label size — this is what turns pixels into
                  dots. A wrong size scales every element; the ASPECT warning
                  fires when the photo and label agree badly.
+    paper_mm / paper_height_mm : size of the physical paper, when it is larger
+                 than the printed design (die-cut stock: a 77 mm label carrying a
+                 70 mm design). The detected edge is the paper, so omitting this
+                 shrinks the whole design by design/paper — measured 8% on a 76 mm
+                 label with a 70 mm design, which shows up as "everything is a bit
+                 smaller than the original". Leave 0 to assume paper == print area.
+    offset_x_mm / offset_y_mm : nudge every element, for when the physical result
+                 sits a millimetre or two off the original. Prefer this over
+                 fudging width_mm/height_mm, which changes scale as well.
     use_ocr    : false to return symbols only (no text).
     llm_url / llm_key / llm_model : optional vision LLM (OpenAI-compatible). Empty
                  values fall back to ZEBRA_VISION_URL / ZEBRA_VISION_KEY /
@@ -414,7 +425,9 @@ def zpl_from_image(image_path: str, width_mm: float = 60.0, height_mm: float = 4
         res = photo.convert(image_path, width_mm=width_mm, height_mm=height_mm,
                             dpi=dpi, frame=frame, use_ocr=use_ocr, font_file=font_file,
                             llm_url=llm_url, llm_key=llm_key, llm_model=llm_model,
-                            vision_timeout=vision_timeout)
+                            vision_timeout=vision_timeout,
+                            paper_mm=paper_mm, paper_height_mm=paper_height_mm,
+                            offset_x_mm=offset_x_mm, offset_y_mm=offset_y_mm)
     except FileNotFoundError:
         return _json({"error": f"image not found: {image_path}"})
     except Exception as exc:
