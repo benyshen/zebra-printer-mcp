@@ -209,6 +209,25 @@ z20, i20 = show("micropdf417 mode", {"dpi": 203, "width_mm": 60, "height_mm": 40
 assert re.search(r"\^BFN,64,5\^FD", z20), z20
 assert not [i for i in i20 if i["severity"] == "error"], i20
 
+# 20b) LOGMARS is ^BL (Code 39 subset, Format ^BLo,h,g), NOT ^BI Industrial 2 of 5.
+# These two were swapped: asking for 'logmars' silently emitted a different
+# symbology, and ^BL was unreachable. ^BI also must not gain a phantom 'f'.
+assert builder.BARCODE_SPECS["logmars"]["cmd"] == "^BL"
+assert builder.BARCODE_SPECS["industrial2of5"]["cmd"] == "^BI"
+zl, il = show("logmars", {"dpi": 203, "width_mm": 60, "height_mm": 40,
+    "fields": [{"type": "barcode", "symbology": "logmars", "data": "ABC123",
+                "x_mm": 2, "y_mm": 2, "height_mm": 8}]})
+assert "^BL" in zl and "^BI" not in zl, zl
+assert re.search(r"\^BLN,64(\^FD|\^FS)", zl), zl        # o,h only — no f/g beyond g
+assert not [i for i in il if i["severity"] == "error"], il
+zi, ii = show("industrial2of5", {"dpi": 203, "width_mm": 60, "height_mm": 40,
+    "fields": [{"type": "barcode", "symbology": "industrial2of5", "data": "1234",
+                "x_mm": 2, "y_mm": 2, "height_mm": 8}]})
+assert "^BI" in zi, zi
+assert not [i for i in ii if i["severity"] == "error"], ii
+assert len(builder.BARCODE_SPECS) == len(builder.BARCODE_CMDS), \
+    (len(builder.BARCODE_SPECS), len(builder.BARCODE_CMDS))
+
 # 21) ASCII preview must show text rendered through ^A@ (TrueType font names
 # contain 'F' in .TTF — the old regex stopped there and dropped the field)
 prev21 = transport.ascii_preview(z15, 70, 30, 200)

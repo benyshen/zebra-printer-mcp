@@ -38,7 +38,7 @@ CJK_FONTS = {"0", "15", "16"}          # ^A p.60 font 15/16 = SC/TC Chinese (mod
 # parameters, so they must not be filled with Y/N.
 INTERP_FG = {"code11", "code128", "code39", "code93", "i2of5", "planet", "postnet",
              "usps", "codabar", "msi", "plessey", "logmars", "std2of5", "ean13",
-             "ean8", "upca", "upce", "upcext"}
+             "ean8", "upca", "upce", "upcext", "industrial2of5"}
 
 BARCODE_CMDS = {
     "code128": ("^BC", "Code 128"), "code39": ("^B3", "Code 39"),
@@ -47,13 +47,14 @@ BARCODE_CMDS = {
     "postnet": ("^BZ", "POSTNET"), "usps": ("^BZ", "USPS IM Barcode"),
     "upsmaxicode": ("^BD", "UPS MaxiCode"), "pdf417": ("^B7", "PDF417"),
     "micropdf417": ("^BF", "MicroPDF417"), "codabar": ("^BK", "ANSI Codabar"),
-    "msi": ("^BM", "MSI"), "plessey": ("^BP", "Plessey"), "logmars": ("^BI", "Industrial 2 of 5"),
+    "msi": ("^BM", "MSI"), "plessey": ("^BP", "Plessey"), "logmars": ("^BL", "LOGMARS"),
+    "industrial2of5": ("^BI", "Industrial 2 of 5"),
     "std2of5": ("^BJ", "Standard 2 of 5"), "ean13": ("^BE", "EAN-13"),
     "ean8": ("^B8", "EAN-8"), "upca": ("^B9", "UPC-A"), "upce": ("^B0", "UPC-E"),
     "upcext": ("^BS", "UPC/EAN add-on"), "gs1databar": ("^BR", "GS1 Databar"),
     "code49": ("^B4", "Code 49"),
     "datamatrix": ("^BX", "Data Matrix"), "qrcode": ("^BQ", "QR Code"),
-    "aztec": ("^BO", "Aztec"), "gs1datamatrix": ("^BX", "GS1 DataMatrix"),
+    "aztec": ("^BO", "Aztec"),
     "code11": ("^B1", "Code 11"),
 }
 
@@ -92,8 +93,10 @@ BARCODE_SPECS = {
                 orient="o", d=dict(o="N", e="B", h=None, f="Y", g="N", E="N")),
     "plessey": dict(cmd="^BP", name="Plessey", page="p.126", letters="oehfg",
                     orient="o", d=dict(o="N", e="N", h=None, f="Y", g="N")),
-    "logmars": dict(cmd="^BI", name="Industrial 2 of 5", page="p.114", letters="ohfg",
-                    orient="o", d=dict(o="N", h=None, f="Y", g="N")),
+    "logmars": dict(cmd="^BL", name="LOGMARS", page="p.120", letters="ohg",
+                    orient="o", d=dict(o="N", h=None, g="N")),
+    "industrial2of5": dict(cmd="^BI", name="Industrial 2 of 5", page="p.114", letters="ohfg",
+                           orient="o", d=dict(o="N", h=None, f="Y", g="N")),
     "std2of5": dict(cmd="^BJ", name="Standard 2 of 5", page="p.116", letters="ohfg",
                     orient="o", d=dict(o="N", h=None, f="Y", g="N")),
     "ean13": dict(cmd="^BE", name="EAN-13", page="p.109", letters="ohfg",
@@ -314,6 +317,8 @@ def _render_barcode(f: dict, dpi: int, issues: list) -> tuple[str, bool]:
     # manual Format line really defines f/g as interpretation lines: on ^BO/^BX/^BR
     # those letters mean other things (symbol count, escape char, segment width).
     for letter in ("fg" if sym in INTERP_FG else ""):
+        if letter not in spec["letters"]:      # ^BL has only g (interpretation above)
+            continue
         key = "interpret" if letter == "f" else "interpret_above"
         if params.get(letter) is None:
             params[letter] = _bool(f.get(key), d.get(letter, "N"))

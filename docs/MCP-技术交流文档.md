@@ -146,10 +146,11 @@ LLM/Agent 要驱动一台 Zebra 标签打印机， ordinarily 需要：懂 ZPL I
 **坐标**：`x_mm/y_mm` 或 `x_dots/y_dots`（给 dots 就跳过换算）；尺寸同理用 `*_mm` / `*_dots`。
 条码高度用字段级 `height_mm`/`height_dots` 覆盖，全局默认走 `barcode_defaults`（`^BY`）。
 
-**支持 27 种条码制式**（`BARCODE_SPECS`，每种按手册 `Format: ^B…` 行确定字母位序）：
+**支持 28 种条码制式**（`BARCODE_SPECS`，每种按手册 `Format: ^B…` 行确定字母位序）：
 code11(`^B1`)、code128(`^BC` p.94)、code39(`^B3`)、code93(`^BA`)、i2of5(`^B2`)、planet(`^B5`)、
 postnet(`^BZ` t=0)、usps(`^BZ` t=3)、upsmaxicode(`^BD`)、pdf417(`^B7`)、micropdf417(`^BF`)、
-codabar(`^BK`)、msi(`^BM`)、plessey(`^BP`)、logmars(`^BI`)、std2of5(`^BJ`)、ean13(`^BE`)、
+codabar(`^BK`)、msi(`^BM`)、plessey(`^BP`)、logmars(`^BL` p.120)、industrial2of5(`^BI`)、
+std2of5(`^BJ`)、ean13(`^BE`)、
 ean8(`^B8`)、upca(`^B9`)、upce(`^B0`)、upcext(`^BS`)、gs1databar(`^BR`)、code49(`^B4`)、
 codablock(`^BB`)、datamatrix(`^BX`)、qrcode(`^BQ` p.128)、aztec(`^BO`)。
 
@@ -195,7 +196,7 @@ codablock(`^BB`)、datamatrix(`^BX`)、qrcode(`^BQ` p.128)、aztec(`^BO`)。
 |---|---|---|
 | `command`（默认） | 单条命令的语法/默认值/范围/页码；查不到时给 `similar` 建议 | `query="^B9"` |
 | `search` | 在命令名称+notes+syntax 上正则搜（最多 25 条） | `query="darkness|speed"` |
-| `barcodes` | 27 种制式的数据规则 + `supported_by_generate_zpl` + `^BY` 默认值 | 空 query |
+| `barcodes` | 28 种制式的数据规则 + `supported_by_generate_zpl` + `^BY` 默认值 | 空 query |
 | `sgd` | Link-OS SGD 命令目录（可按名字过滤） | `query="calibration"` |
 | `status` | `~HS` 状态码表 | `0000=READY, 0002=HEAD OPEN, 0003=PAPER OUT, 8000=TOO HOT…` |
 | `list` | 全部 253 条命令 token | 空 query |
@@ -441,7 +442,7 @@ uv pip install --python .venv\Scripts\python.exe -e .
 
 | 层 | 手段 | 状态 |
 |---|---|---|
-| 单元 | `tests/test_builder.py`：31 组断言——默认值/范围、27 种制式的 Format 位序、QR `^FD` 前缀、`^A@` 中文、`^FH` 转义、`^FB`、图形、编码仲裁、validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报、`^FD` 数据不误报）、validate 单独可用（首次调用自装命令目录）、xlsx 读表/列解析/Code128 居中/多标签单流、逐轴坐标不回零、照片→ZPL（解码内容/几何 ±4 dot/`^BY` 逐字段/校验器回环）、离线渲染几何（条码 x30…332、QR x379…441、`^A0N,43` 墨迹 153±4×33±2 全与 Zebra 逐值一致） | `ALL TESTS PASSED` |
+| 单元 | `tests/test_builder.py`：31 组断言——默认值/范围、28 种制式的 Format 位序、QR `^FD` 前缀、`^A@` 中文、`^FH` 转义、`^FB`、图形、编码仲裁、validate 正反例（`^QQ` 报 UNKNOWN、`^ZZ0` 不报、`^FD` 数据不误报）、validate 单独可用（首次调用自装命令目录）、xlsx 读表/列解析/Code128 居中/多标签单流、逐轴坐标不回零、照片→ZPL（解码内容/几何 ±4 dot/`^BY` 逐字段/校验器回环）、离线渲染几何（条码 x30…332、QR x379…441、`^A0N,43` 墨迹 153±4×33±2 全与 Zebra 逐值一致） | `ALL TESTS PASSED` |
 | 协议 | stdio 探针（initialize→initialized→tools/list→tools/call 逐条驱动） | 6 工具全通 |
 | 语义/渲染 | Labelary 渲染 PNG → opencv `QRCodeDetector` 解码（本地没有扫枪时的等价验证） | `^FDQA,…` 解出原串；旧写法 `^FDhttps://…` 解出 `ps://…`（少 `htt`） |
 | 实机 | TCP 9100 打印、`~HI/~HS`、web 目录、中文字体对比标签 | 全部通过（ZR668） |
@@ -517,7 +518,7 @@ uv pip install --python .venv\Scripts\python.exe -e .
 | 文件 | 行数 | 核心内容 |
 |---|---|---|
 | `src/zebra_mcp/server.py` | 437 | FastMCP 入口、9 工具、SGD↔原生状态回退逻辑（含 `~HS` 状态字解析） |
-| `src/zebra_mcp/builder.py` | 713 | `build_label`（spec→ZPL）、`validate_zpl`、27 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
+| `src/zebra_mcp/builder.py` | 713 | `build_label`（spec→ZPL）、`validate_zpl`、28 制式 `BARCODE_CMDS`/`BARCODE_SPECS`（逐制式 Format 字母位序）、`^A@` font_file、默认值/范围校验（带页码） |
 | `src/zebra_mcp/transport.py` | 257 | `_clean_zpl` 编码仲裁、`send_tcp`、`list_windows_printers`、`send_windows_printer`（winspool RAW）、`ascii_preview`、`write_preview` |
 | `src/zebra_mcp/knowledge.py` | 337 | `COMMAND_NOTES`、`BARCODE_NOTES`、`SGD_COMMANDS`、`STATUS_NOTES`、`known_commands()` |
 | `src/zebra_mcp/catalog.py` | 15 | 把 253 命令目录注入 builder 校验器 |

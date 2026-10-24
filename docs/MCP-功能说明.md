@@ -1,6 +1,6 @@
 # Zebra 打印 MCP · 详细功能说明
 
-> 版本 0.3.0 ｜ stdio MCP server ｜ 9 个工具 ｜ 253 条命令 ｜ 27 种条码制式 ｜ 31 组回归断言
+> 版本 0.3.0 ｜ stdio MCP server ｜ 9 个工具 ｜ 253 条命令 ｜ 28 种条码制式 ｜ 31 组回归断言
 > 所有数字与默认值均从代码与 ZPL II 编程手册（zpl-zbi2-pg-en-202609）取，不是估计值。
 
 一句话：**模型只填结构化字段，ZPL 的语法、默认值、参数位序、单位换算、编码由服务端保证。**
@@ -16,7 +16,7 @@
 | 传输 | TCP 9100 raw / Windows 打印队列（RAW）/ USB 队列 / 纯文件预览 |
 | 平台 | Windows 实测（ZR668-200dpi，固件 V86.20.21Z）；Linux/macOS 除 windows/usb 通道外通用 |
 | 依赖 | 核心只有 `mcp>=1.9,<2`；照片→ZPL 需 `[photo]` extra |
-| 受控数据 | 253 条命令目录、27 种条码制式表、13 个状态码、27 条 SGD 命令 |
+| 受控数据 | 253 条命令目录、28 种条码制式表、13 个状态码、27 条 SGD 命令 |
 
 ---
 
@@ -54,7 +54,7 @@
 |---|---|---|
 | `command` | 单条命令的语法、默认值、范围、手册页码 | `^BY`、`^BQ`、`~DG` |
 | `search` | 在全部命令笔记上做正则搜索 | `darkness\|speed` |
-| `barcodes` | 27 种制式的参数位序与数据规则 | 留空列全部 |
+| `barcodes` | 28 种制式的参数位序与数据规则 | 留空列全部 |
 | `sgd` | Link-OS SGD 的 setvar/getvar/do 示例（27 条） | `calibration` |
 | `status` | ZBI II 状态/错误码（13 条，含 `0000 = PRINTER READY`） | 留空列全部 |
 | `list` | 全部命令 token | — |
@@ -192,7 +192,7 @@
 
 ### 4.2 `barcode`
 
-通用键：`symbology`（§5 的 27 个 key）、`data`、`x_*`/`y_*`、`orientation`、`height_mm`/`height_dots`、`module_width`、`module_ratio`、`bar_height`（这三个会就地重发 `^BY`）、`no_hex`。
+通用键：`symbology`（§5 的 28 个 key）、`data`、`x_*`/`y_*`、`orientation`、`height_mm`/`height_dots`、`module_width`、`module_ratio`、`bar_height`（这三个会就地重发 `^BY`）、`no_hex`。
 制式专属键见 §5 最后一列。
 
 ### 4.3 `note` / `box`
@@ -214,7 +214,7 @@
 
 ---
 
-## 5. 支持的 27 种条码
+## 5. 支持的 28 种条码
 
 参数位序按各制式**自己的 Format 行**（不能套 `^BC` 的 `o,h,f,g,e`）。字母含义以 `zpl_knowledge(mode="command", query="^Bx")` 返回为准（含手册页码）。
 
@@ -226,7 +226,8 @@
 | `code11` | Code 11 | `^B1` | o,e,h,f,g | f=Y | `check_digit` |
 | `i2of5` | Interleaved 2 of 5 | `^B2` | o,h,f,g,e,j | f=Y | `check_digit` |
 | `std2of5` | Standard 2 of 5 | `^BJ` | o,h,f,g | f=Y | — |
-| `logmars` | Industrial 2 of 5 | `^BI` | o,h,f,g | f=Y | — |
+| `logmars` | LOGMARS (Code 39 子集) | `^BL` | o,h,g | g=N（在符号上方） | — |
+| `industrial2of5` | Industrial 2 of 5 | `^BI` | o,h,f,g | f=Y g=N | — |
 | `codabar` | Codabar | `^BK` | o,e,h,f,g,k,l | k=A l=A | `start_char`/`stop_char` |
 | `msi` | MSI | `^BM` | o,e,h,f,g,E | e=B E=N | `check_digit`、`insert_check_digit` |
 | `plessey` | Plessey | `^BP` | o,e,h,f,g | f=Y | `check_digit` |

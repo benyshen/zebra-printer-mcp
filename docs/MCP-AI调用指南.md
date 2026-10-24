@@ -13,7 +13,7 @@
 | | 说明 |
 |---|---|
 | **是** | 一个本地 **stdio MCP server**（不是 HTTP 服务、不是云端 API），把"生成 ZPL / 校验 ZPL / 查手册 / 列打印机 / 发送 / 查状态 / 按表格批量打"七件事封成七个工具 |
-| **是** | 知识来源固定：ZPL II 编程手册（`zpl-zbi2-pg-en`）的 253 条命令目录、27 种条码制式的 Format 行页码——答案可回溯到手册页，不是模型记忆 |
+| **是** | 知识来源固定：ZPL II 编程手册（`zpl-zbi2-pg-en`）的 253 条命令目录、28 种条码制式的 Format 行页码——答案可回溯到手册页，不是模型记忆 |
 | **不是** | 打印中间件：没有队列管理、没有重试与审计、没有多机调度 |
 | **不是** | 标签设计器：不做版式拖拽、不做图像半色调、不做套印对齐 |
 | **不是** | 网络服务：无端口、无鉴权面，跟着客户端进程活（stdio 生命周期） |
@@ -42,7 +42,7 @@ ZPL 是**无校验的文本协议**：语法错了打印机会照样吃，版式
 
 | 维度 | 模型直写 ZPL | 本 MCP |
 |---|---|---|
-| 模型需要的知识 | 27 制式位序、`^FD` 前缀、`^CI` 编码、单位换算 | 一个 JSON spec（`type/data/x_mm/y_mm/size_mm`…） |
+| 模型需要的知识 | 28 制式位序、`^FD` 前缀、`^CI` 编码、单位换算 | 一个 JSON spec（`type/data/x_mm/y_mm/size_mm`…） |
 | 出错时机 | 打出来才发现（要人工扫码/量尺） | 发射前返回 `issues[]`，带 `code`/`field`/手册页码 |
 | 出错方式 | 静默错标签 | 可自纠错的返回（模型读到 `QR_FD_PREFIX` 就知道补前缀） |
 | 复现性 | 每次生成文本不同 | **同一 spec → 同一字节**（可 diff、可进回归） |
@@ -141,7 +141,7 @@ Hermes 写 config 时 JSON 路径用**正斜杠**，且别直接手改 `config.y
 | `UNKNOWN_CMD` | 命令不在 253 条目录内 | 拼写错，或用了本机型不支持的扩展 |
 | `CI_CJK` | 有非 ASCII 但没配 `^CI28`/UTF-8 | 加 `font_file` 或让工具接管编码 |
 | `EAN13_DATA` / `UPCA_DATA` | 数据位数/校验位不对 | 补足 12/11 位，或让打印机算校验 |
-| `BARCODE_UNKNOWN` | `symbology` 名字不在 27 种里 | 用 `zpl_knowledge(mode="barcodes")` 查名字 |
+| `BARCODE_UNKNOWN` | `symbology` 名字不在 28 种里 | 用 `zpl_knowledge(mode="barcodes")` 查名字 |
 | `POS` / `ORIGIN` / `PW` / `LL` | 坐标或标签尺寸超出打印区 | 缩小尺寸，或改 `print_width_dots`/`label_length_dots` |
 | `FONT_FILE` / `TEXT_SIZE` | 字体文件名或字号非法 | 用 `E:SIMSUN.TTF` 这类打印机内文件名；字号 10–32000 dots |
 
@@ -279,8 +279,8 @@ generate_zpl(spec) → render_zpl(zpl) → 看 PNG → 改坐标/字号 → 再�
 
 | 模块 | 行数 | 职责 |
 |---|---|---|
-| `builder.py` | 713 | spec→ZPL（含 27 制式 `BARCODE_SPECS`、图形、单位换算、范围校验、`validate_zpl`） |
-| `knowledge.py` | 337 | 253 命令目录、69 条命令页、27 制式规则、27 条 SGD、13 个状态码 |
+| `builder.py` | 713 | spec→ZPL（含 28 制式 `BARCODE_SPECS`、图形、单位换算、范围校验、`validate_zpl`） |
+| `knowledge.py` | 337 | 253 命令目录、69 条命令页、28 制式规则、27 条 SGD、13 个状态码 |
 | `transport.py` | 257 | 编码仲裁（`^CI28`+UTF-8）、TCP、winspool RAW、ASCII 预览 |
 | `server.py` | 437 | 九个工具、SGD↔原生（`~HI`/`~HS`）状态回退 |
 | `catalog.py` | 15 | 把手册目录注入校验器 |
@@ -293,7 +293,7 @@ generate_zpl(spec) → render_zpl(zpl) → 看 PNG → 改坐标/字号 → 再�
 
 ### 4.3 覆盖范围（能做的）
 
-- **条码 27 种**：Code128/39/93/11、I2of5、Std2of5、Codabar、MSI、Plessey、Logmars、EAN13/EAN8/UPCA/UPCE/UPCExt、GS1 DataBar、Code49、Codablock、PDF417/MicroPDF417、DataMatrix、QR、Aztec、MaxiCode、Planet/Postnet/USPS IM。
+- **条码 28 种**：Code128/39/93/11、I2of5、Industrial2of5、Std2of5、Codabar、MSI、Plessey、Logmars、EAN13/EAN8/UPCA/UPCE/UPCExt、GS1 DataBar、Code49、Codablock、PDF417/MicroPDF417、DataMatrix、QR、Aztec、MaxiCode、Planet/Postnet/USPS IM。
 - **图形**：`box`（`^GB`）、`circle`（`^GC`）、`reverse`（`^FR`）、`image`（`^XGR` 引用已下载的 `.GRF`）。
 - **版式**：`^FO`/`^FT`、`^FB` 多行块（自动折行/对齐）、`^FH` hex 转义、字符编码、镜像/反白、`^PR` 速度、`^MD` 浓度、`^MN`/`^MM` 介质。
 - **中文**：内置 `E:SIMSUN.TTF` / `E:HANS.TTF` 配方实测可打（`^CI28` + UTF-8 + `^A@`）。

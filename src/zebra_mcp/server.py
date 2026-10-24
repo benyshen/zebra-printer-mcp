@@ -110,8 +110,8 @@ def generate_zpl(label_spec: dict) -> str:
         {type:'reverse'},
         {type:'image', name, device R|E}  # download first with printer_graphics
       ]
-    symbologies: code128 code39 code93 i2of5 planet postnet usps upsmaxicode pdf417
-      micropdf417 codabar msi plessey logmars std2of5 ean13 ean8 upca upce upcext
+    symbologies: code128 code39 code93 i2of5 industrial2of5 planet postnet usps upsmaxicode
+      pdf417 micropdf417 codabar msi plessey logmars std2of5 ean13 ean8 upca upce upcext
       gs1databar code49 codablock datamatrix qrcode aztec code11
     """
     zpl, issues = builder.build_label(label_spec)
