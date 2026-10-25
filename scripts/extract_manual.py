@@ -5,16 +5,19 @@ publication). Keep the PDF out of git too. This script recreates, from your own
 copy of zpl-zbi2-pg-en-202609.pdf (https://www.zebra.com/zpl — ZPL II Programming
 Guide), everything the package needs for offline use:
 
-    data/zpl_manual_full.txt    full text, page anchors "<<<PAGE n>>>"
-    data/zpl_command_secs.txt   per-command sections pulled from the manual
-    data/zpl_params_notes.txt   parameter/format-line notes per command
-    data/command_catalog.txt    the ^/~ command catalog used by validate_zpl
-                                (this one small file IS committed)
+    <zpl-core>/data/zpl_manual_full.txt    full text, page anchors "<<<PAGE n>>>"
+    <zpl-core>/data/zpl_command_secs.txt   per-command sections pulled from the manual
+    <zpl-core>/data/zpl_params_notes.txt   parameter/format-line notes per command
+    <zpl-core>/data/command_catalog.txt    the ^/~ command catalog used by validate_zpl
+                                           (this one small file IS committed, in zpl-core)
+
+The catalog now ships with the zpl-core package, so this script writes there:
+`zpl_core.DATA_DIR` when zpl-core is installed, else ../zpl-core/src/zpl_core/data.
 
 Usage:
     python scripts/extract_manual.py /path/to/zpl-zbi2-pg-en-202609.pdf
 
-Only data/command_catalog.txt is required at runtime (known_commands() prefers
+Only command_catalog.txt is required at runtime (known_commands() prefers
 it); the other three are research aids used while developing the knowledge base.
 """
 import re
@@ -23,7 +26,16 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-DATA = Path(__file__).resolve().parents[1] / "data"
+def _data_dir() -> Path:
+    try:
+        import zpl_core
+
+        return Path(zpl_core.DATA_DIR)
+    except Exception:
+        return Path(__file__).resolve().parents[2] / "zpl-core" / "src" / "zpl_core" / "data"
+
+
+DATA = _data_dir()
 _CMD_RE = re.compile(r"[~^][A-Z0-9@]{1,2}")
 _SEC_RE = re.compile(r"<<<PAGE (\d+)>>>\s*ZPL Commands\s+(\^[A-Z0-9]{1,2})\s")
 

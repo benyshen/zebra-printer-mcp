@@ -1,6 +1,8 @@
 # Zebra 打印 MCP · 详细功能说明
 
-> 版本 0.3.0 ｜ stdio MCP server ｜ 9 个工具 ｜ 253 条命令 ｜ 28 种条码制式 ｜ 31 组回归断言
+> **v0.4.0 起：** 引擎已抽成独立包 [zpl-core](https://github.com/benyshen/zpl-core)。本文里的 `src/zebra_mcp/builder.py` 等路径，现在对应 `zpl_core/builder.py`；本仓库只剩 `server.py` 这层 MCP 外壳。协议、工具语义、ZPL 细节均未变化。
+
+> 版本 0.4.0 ｜ stdio MCP server ｜ 9 个工具 ｜ 引擎 zpl-core 0.1.0（253 条命令 ｜ 28 种条码制式 ｜ 31 组回归断言在引擎仓库）
 > 所有数字与默认值均从代码与 ZPL II 编程手册（zpl-zbi2-pg-en-202609）取，不是估计值。
 
 一句话：**模型只填结构化字段，ZPL 的语法、默认值、参数位序、单位换算、编码由服务端保证。**
@@ -450,4 +452,3 @@ python scripts/xlsx_labels.py 名单.xlsx --name 姓名 --id 员工号 --execute
 ```
 
 表格批量有 CLI 孪生（默认 dry-run，`--execute` 才发送）。生成单张标签没有等价 CLI，用 JSON-RPC 探针即可。
-

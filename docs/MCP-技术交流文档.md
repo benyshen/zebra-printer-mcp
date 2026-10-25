@@ -1,5 +1,7 @@
 # Zebra 打印 MCP 服务器 — 技术交流文档
 
+> **v0.4.0 起：** 引擎已抽成独立包 [zpl-core](https://github.com/benyshen/zpl-core)。本文里的 `src/zebra_mcp/builder.py` 等路径，现在对应 `zpl_core/builder.py`；本仓库只剩 `server.py` 这层 MCP 外壳。协议、工具语义、ZPL 细节均未变化。
+
 **项目**：`zebra-printer-mcp` — ZPL 标签生成 + Zebra Link-OS 打印机控制的 stdio MCP 服务器
 **配套**：[`MCP-AI调用指南.md`](MCP-AI调用指南.md) —— 面向"该不该用、怎么交给 AI 用"的选型文档（优势 / 使用方法 / 适宜与不适宜场景 / 功能模块）。
 

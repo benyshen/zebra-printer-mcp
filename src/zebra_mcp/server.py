@@ -22,8 +22,9 @@ import sys
 
 from mcp.server.fastmcp import FastMCP
 
-from . import builder, knowledge, photo, transport, xlsx_batch
-from . import catalog  # noqa: E402  (installs manual catalog into builder.validate_zpl)
+# 引擎全部来自 zpl-core：本仓库只剩 MCP 协议外壳（工具名、schema、参数校验）。
+# catalog 一旦被导入，就把手册命令目录装进 builder.validate_zpl。
+from zpl_core import builder, catalog, knowledge, photo, transport, xlsx_batch  # noqa: F401
 
 # FastMCP in MCP SDK 1.x takes no version kwarg; serverInfo.version therefore
 # reports the SDK's own version (1.30.0 here), while the package version lives
@@ -149,10 +150,10 @@ def render_zpl(zpl: str, out_path: str = "", scale: int = 1) -> str:
     true label size in printer dots, so don't confuse the two.
     """
     try:
-        from .render import render as _render
+        from zpl_core.render import render as _render
     except ImportError as exc:                     # optional extra
         return _json({"ok": False,
-                      "error": f"render needs the [render] extra: pip install -e '.[render]' ({exc})"})
+                      "error": f"render needs zpl-core[render]: pip install 'zpl-core[render]' ({exc})"})
     out = out_path or ""
     try:
         result = _render(zpl, scale=max(1, int(scale)), out=out or None)

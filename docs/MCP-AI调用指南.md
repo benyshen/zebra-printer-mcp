@@ -1,5 +1,7 @@
 # Zebra 打印 MCP · AI 调用指南
 
+> **v0.4.0 起：** 引擎已抽成独立包 [zpl-core](https://github.com/benyshen/zpl-core)。本文里的 `src/zebra_mcp/builder.py` 等路径，现在对应 `zpl_core/builder.py`；本仓库只剩 `server.py` 这层 MCP 外壳。协议、工具语义、ZPL 细节均未变化。
+
 > **一句话**：让模型只说"这张标签要什么"，ZPL 由工具生成、校验、送出——模型不需要背 ZPL 语法。
 >
 > 版本 0.1.1 ｜ 仓库 <https://github.com/benyshen/zebra-printer-mcp> ｜ 实测机型 ZR668-200dpi（固件 V86.20.21Z）

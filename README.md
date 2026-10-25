@@ -2,6 +2,8 @@
 
 ZPL 标签生成 + Zebra Link-OS 打印机控制的 **stdio MCP 服务器**（Windows 实机跑通，Linux/macOS 除 `windows`/`usb` 传输外通用）。
 
+> **这是一个薄壳。** 引擎（ZPL 生成、命令知识库、渲染、照片反推、批量 Excel、传输）在独立包 **[zpl-core](https://github.com/benyshen/zpl-core)** 里，本仓库只剩 MCP 协议层：9 个工具的名字、参数 schema、JSON-RPC 生命周期。同一份引擎还被 [zebra-printer-skill](https://github.com/benyshen/zebra-printer-skill) 的 CLI 外壳复用。
+
 > **技术交流完整版文档**：[`docs/MCP-技术交流文档.md`](docs/MCP-技术交流文档.md)（协议、ZPL 细节、踩坑清单）
 >
 > **AI 调用选型指南**：[`docs/MCP-AI调用指南.md`](docs/MCP-AI调用指南.md)（为什么适合 AI 用、怎么用、**什么场景不该用**）
@@ -15,15 +17,34 @@ ZPL 标签生成 + Zebra Link-OS 打印机控制的 **stdio MCP 服务器**（Wi
 git clone https://github.com/benyshen/zebra-printer-mcp.git
 cd zebra-printer-mcp
 uv venv .venv --python 3.12      # 或 python -m venv .venv
+
+# 引擎 + 外壳。zpl-core 还没上 PyPI，先按下面二选一装它：
+pip install "git+https://github.com/benyshen/zpl-core@v0.1.0"   # 从源码
+pip install --find-links <下载目录> "zpl-core[all]==0.1.0"        # 或从 wheel
 # Windows:
-.venv\Scripts\pip install -e .
+.venv\Scripts\pip install -e ".[all]"
 # Linux/macOS:
-.venv/bin/pip install -e .
+.venv/bin/pip install -e ".[all]"
 
 # 自检（不需要打印机）
-.venv/bin/python tests/test_builder.py    # → ALL TESTS PASSED
+.venv/bin/python tests/test_server.py    # → ALL SHELL CHECKS PASSED（9 工具 + JSON 形状）
 .venv/bin/python scripts/mcp_probe.py     # raw JSON-RPC 探针，列出 9 工具
 ```
+
+引擎自己的测试（31 组 ZPL 生成断言 + 包级不变量）在 zpl-core 仓库：
+`python tests/test_engine.py` 和 `python tests/test_package.py`。
+
+## 仓库里还剩什么
+
+```
+src/zebra_mcp/server.py    MCP 协议层（450 行）：9 个 @mcp.tool、参数文档、结果序列化
+src/zebra_mcp/__init__.py  版本号 + ENGINE_VERSION（跟 zpl-core 对照）
+scripts/                   mcp_probe.py（JSON-RPC 探针）、extract_manual.py（重建命令目录，写进 zpl-core）
+tests/test_server.py       外壳断言：工具注册齐全、引擎符号解析到 zpl_core、各工具 JSON 形状
+docs/                      协议/踩坑/选型文档
+```
+
+引擎模块（builder / knowledge / render / photo / ocr / transport / xlsx_batch）已全部移出——仓库里留一份副本就等于留一份漂移。
 
 > **必须 `mcp<2`**：2.x 移除了 `mcp.server.fastmcp`，pyproject 已钉 `mcp>=1.9,<2`。
 
@@ -46,7 +67,7 @@ uv venv .venv --python 3.12      # 或 python -m venv .venv
 校验器管语法，管不了"字压到条码上了"。`render_zpl` 把 ZPL 画成 PNG，纯本地，约 50 ms：
 
 ```bash
-pip install -e ".[render]"          # pillow + segno + python-barcode，三个纯 Python 依赖
+pip install -e ".[render]"          # 转发到 zpl-core[render]：pillow + segno + python-barcode
 ```
 
 ```json
