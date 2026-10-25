@@ -18,9 +18,8 @@ git clone https://github.com/benyshen/zebra-printer-mcp.git
 cd zebra-printer-mcp
 uv venv .venv --python 3.12      # 或 python -m venv .venv
 
-# 引擎 + 外壳。zpl-core 还没上 PyPI，先按下面二选一装它：
-pip install "git+https://github.com/benyshen/zpl-core@v0.1.0"   # 从源码
-pip install --find-links <下载目录> "zpl-core[all]==0.1.0"        # 或从 wheel
+# 引擎已发 PyPI，直接装（zpl-core 由本包的依赖自动带上）
+pip install "zpl-core[all]==0.1.0"
 # Windows:
 .venv\Scripts\pip install -e ".[all]"
 # Linux/macOS:
