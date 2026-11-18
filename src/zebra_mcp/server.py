@@ -98,22 +98,26 @@ def generate_zpl(label_spec: dict) -> str:
     label_spec (sizes in mm unless *_dots):
       dpi (152/203/300/600), width_mm, height_mm, quantity, darkness (-30..30),
       char_encoding (^CI; auto ^CI28 when CJK text present),
-      print_speed/slew_speed/backfeed_speed, mirror, invert, label_top,
-      media_tracking {mode N/Y/W/M/B/A}, print_mode {mode T/P/R/A/K},
+      print_speed/slew_speed/backfeed_speed (1-12 or A-E), mirror, invert (^PO N/I),
+      label_top, shift_left,
+      media_tracking {mode N/Y/W/M/A/V}, print_mode {mode T/P/R/A/C/D/F/L/U/K},
+      pq_extra {pause, replicates, override_pause, cut_on_error} (^PQ q,p,r,o,e),
       barcode_defaults {module_width, ratio, bar_height} (^BY),
       default_font {font, height, width} (^CF),
       fields: [
         {type:'text', data, x_mm|x_dots, y_mm|y_dots, font '0-9A-Z', size_mm,
-         orientation N/R/I/B, origin FO|FT, block:{width_mm,lines,line_height,alignment L/C/R/J}},
-        {type:'barcode', symbology, data, height_mm, interpret, ...per-symbology options},
-        {type:'note'|'box', x_mm,y_mm,width_mm,height_mm,thickness},
+         orientation N/R/I/B, origin FO|FT, justify 0|1|2, reverse true,
+         block:{width_mm,lines,line_spacing,alignment L/C/R/J,hanging_indent}},
+        {type:'barcode', symbology, data, height_mm, interpret, reverse,
+         ...per-symbology options (quality/columns for datamatrix, mode for code128,
+         ec_level/input_mode/char_mode/mixed_mode for qrcode, ...)},
+        {type:'note'|'box', x_mm,y_mm,width_mm,height_mm,thickness,color B|W,corner_rounding 0-8},
         {type:'circle', x_mm,y_mm,diameter_mm,thickness},
-        {type:'reverse'},
         {type:'image', name, device R|E}  # download first with printer_graphics
       ]
     symbologies: code128 code39 code93 i2of5 industrial2of5 planet postnet usps upsmaxicode
       pdf417 micropdf417 codabar msi plessey logmars std2of5 ean13 ean8 upca upce upcext
-      gs1databar code49 codablock datamatrix qrcode aztec code11
+      gs1databar code49 codablock datamatrix qrcode aztec code11 tlc39
     """
     zpl, issues = builder.build_label(label_spec)
     res = {"zpl": zpl, "issues": issues}

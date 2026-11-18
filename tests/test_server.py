@@ -64,8 +64,10 @@ check("zpl_knowledge returns the ^BY entry",
       r.get("found") is True and "syntax" in r, str(r)[:80])
 
 r = json.loads(server.zpl_knowledge(mode="barcodes"))
-check("zpl_knowledge barcodes mode lists 28 symbologies",
-      len(r.get("supported_by_generate_zpl", [])) == 28, str(len(r.get("symbologies", {}))))
+supported = r.get("supported_by_generate_zpl", [])
+check("zpl_knowledge barcodes mode tracks the engine",
+      len(supported) == len(zpl_core.builder.BARCODE_SPECS) and {"upca", "upce", "tlc39"} <= set(supported),
+      f"{len(supported)} symbologies")
 
 spec = {"dpi": 203, "width_mm": 60, "height_mm": 40, "fields": [
     {"type": "text", "x_mm": 3, "y_mm": 3, "height_dots": 30, "data": "SHELL"},
