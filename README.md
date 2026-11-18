@@ -19,7 +19,7 @@ cd zebra-printer-mcp
 uv venv .venv --python 3.12      # 或 python -m venv .venv
 
 # 引擎已发 PyPI，直接装（zpl-core 由本包的依赖自动带上）
-pip install "zpl-core[all]==0.1.0"
+pip install "zpl-core[all]==0.2.0"
 # Windows:
 .venv\Scripts\pip install -e ".[all]"
 # Linux/macOS:
@@ -30,8 +30,13 @@ pip install "zpl-core[all]==0.1.0"
 .venv/bin/python scripts/mcp_probe.py     # raw JSON-RPC 探针，列出 9 工具
 ```
 
-引擎自己的测试（31 组 ZPL 生成断言 + 包级不变量）在 zpl-core 仓库：
-`python tests/test_engine.py` 和 `python tests/test_package.py`。
+引擎自己的测试在 zpl-core 仓库，三份：
+
+```bash
+python tests/test_engine.py     # 31 组 ZPL 生成断言
+python tests/test_package.py    # 包级不变量（数据随包、命令表一致）
+python tests/test_manual.py     # 手册合规：Format 字母 / 页码 / 默认值逐条比对
+```
 
 ## 仓库里还剩什么
 
