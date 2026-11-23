@@ -19,7 +19,7 @@ cd zebra-printer-mcp
 uv venv .venv --python 3.12      # 或 python -m venv .venv
 
 # 引擎已发 PyPI，直接装（zpl-core 由本包的依赖自动带上）
-pip install "zpl-core[all]==0.2.0"
+pip install "zpl-core[all]==0.3.2"
 # Windows:
 .venv\Scripts\pip install -e ".[all]"
 # Linux/macOS:

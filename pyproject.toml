@@ -5,15 +5,15 @@ description = "MCP server shell for ZPL label generation and Zebra Link-OS print
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.9,<2",
-    "zpl-core>=0.2.0",
+    "zpl-core>=0.3.2",
 ]
 
 [project.optional-dependencies]
 # render -> offline ZPL-to-PNG so an agent can look at the label before printing
-render = ["zpl-core[render]>=0.2.0"]
+render = ["zpl-core[render]>=0.3.2"]
 # photo -> label photo to ZPL (PP-OCRv4 weights ship inside zpl-core)
-photo = ["zpl-core[ocr]>=0.2.0"]
-all = ["zpl-core[all]>=0.2.0"]
+photo = ["zpl-core[ocr]>=0.3.2"]
+all = ["zpl-core[all]>=0.3.2"]
 
 [project.scripts]
 zebra-printer-mcp = "zebra_mcp.server:main"
